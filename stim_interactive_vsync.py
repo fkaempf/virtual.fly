@@ -8,11 +8,11 @@ import pygame
 from collections import deque
 
 # --------------- user settings ---------------
-IMG_FOLDER   = '/Users/fkampf/Documents/one2one-mapping/mycode/og_pics'
+IMG_FOLDER   = r"D:\virtual.fly\og_pics"
 PATTERN      = "fly*.png"
 
 # Window layout
-STIM_W, STIM_H = 1280, 720
+STIM_W, STIM_H = 1280, 800
 MAP_W,  MAP_H  = 420,  420
 PAD = 12
 BG_COLOR = (255, 255, 255)
