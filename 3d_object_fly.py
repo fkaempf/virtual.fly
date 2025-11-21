@@ -74,22 +74,21 @@ TARGET_FPS = 60
 ARENA_RADIUS_MM = 20.0
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
-CAM_HEIGHT_MM   = 5
+CAM_HEIGHT_MM   = 0
 
-SPEED_MM_S       = 20.0
+SPEED_MM_S       = 4.0
 BACK_MM_S        = SPEED_MM_S * 0.64
-TURN_DEG_S       = 200.0
+TURN_DEG_S       = 60
 STAND_TURN_MULT  = 1.5
 
-START_POS         = (0.0, 0.0)
+START_POS         = (0, 0)
 START_HEADING_DEG = 0.0
 
 CAMERA_SPEED_MM_S      = SPEED_MM_S
 CAMERA_TURN_DEG_S      = TURN_DEG_S
 CAMERA_STAND_TURN_MULT = 1.5
+CAMERA_Z_SPEED_MM_S    = SPEED_MM_S
 
-# arena / minimap FOV (stays as before)
-CAMERA_FOV_X_DEG = 100.0
 
 # 3D fly camera FOV (sane perspective, independent of arena FOV)
 # If FLY_CAM_FOV_X_DEG is not None, vertical FOV will be derived from it and the camera aspect.
@@ -852,7 +851,7 @@ def load_warp(mapx_path: Path, mapy_path: Path, factor: float = 1):
 def main():
     warp, cam_w, cam_h, proj_w, proj_h = load_warp(MAPX_PATH, MAPY_PATH)
 
-    mon = pick_monitor(proj_w, proj_h, which='left')
+    mon = pick_monitor(proj_w, proj_h, which='right')
 
     if not is_mac:
         os.environ.setdefault("SDL_VIDEODRIVER", "windows")
@@ -999,8 +998,8 @@ def main():
     max_fov_rad = math.radians(179.0)
     fov_y_rad = min(fov_y_rad_raw, max_fov_rad) if FLY_CAM_ALLOW_ULTRAWIDE else fov_y_rad_raw
 
-    fov_y_deg_effective = math.degrees(fov_y_rad)
-    fov_x_deg_effective = math.degrees(2.0 * math.atan(math.tan(0.5 * fov_y_rad) * aspect))
+    fov_y_deg_effective = abs(math.degrees(fov_y_rad))
+    fov_x_deg_effective = abs(math.degrees(2.0 * math.atan(math.tan(0.5 * fov_y_rad) * aspect)))
     print(f"Fly camera FOV used: {fov_y_deg_effective:.2f} deg vertical, {fov_x_deg_effective:.2f} deg horizontal (aspect {aspect:.3f})")
     z_near = 1.0
     z_far = 10.0 * ARENA_RADIUS_MM
@@ -1018,6 +1017,7 @@ def main():
 
     camera_x = CAMERA_X_MM
     camera_y = CAMERA_Y_MM
+    cam_height = CAM_HEIGHT_MM
     cam_heading = math.radians(START_HEADING_DEG)
 
     speed_f = SPEED_MM_S
@@ -1170,6 +1170,10 @@ def main():
         if keys[pygame.K_DOWN]:
             camera_x -= CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
             camera_y -= CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
+        if keys[pygame.K_PERIOD]:
+            cam_height += CAMERA_Z_SPEED_MM_S * dt
+        if keys[pygame.K_COMMA]:
+            cam_height -= CAMERA_Z_SPEED_MM_S * dt
 
         r_cam_center = math.hypot(camera_x, camera_y)
         if r_cam_center > ARENA_RADIUS_MM:
@@ -1190,7 +1194,7 @@ def main():
         GL.glClearColor(BG_COLOR[2] / 255.0, BG_COLOR[1] / 255.0, BG_COLOR[0] / 255.0, 1.0)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
-        eye = [camera_x, CAM_HEIGHT_MM, camera_y]
+        eye = [camera_x, cam_height, camera_y]
         forward = [math.sin(cam_heading), 0.0, math.cos(cam_heading)]
         target = [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]]
         up = [0.0, 1.0, 0.0]
