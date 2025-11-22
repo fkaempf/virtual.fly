@@ -84,7 +84,7 @@ LIGHT_INTENSITIES = [2.0, 2.0, 2.0, 2.0]  # strengths for N, E, S, W
 LIGHT_ELEVATION_DEG = 65.0       # elevation angle above horizon (0=horizon, 90=down)
 LIGHT_MAX_GAIN = 4.0             # clamp on total light gain
 
-ARENA_RADIUS_MM = 20.0
+ARENA_RADIUS_MM = 40
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
 CAM_HEIGHT_MM   = 2.89
@@ -216,10 +216,14 @@ void main() {
 
     if (u_projMode == 1) {
         vec3 dir = normalize(-view_pos.xyz); // camera looks down -Z; use forward as +Z in this space
+        if (dir.z <= 0.0) { // behind camera -> clip
+            gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
         float theta = acos(clamp(dir.z, -1.0, 1.0)); // polar angle from forward
         float max_theta = 0.5 * max(u_fovX, u_fovY);
         if (theta > max_theta) {
-            gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // clip outside FOV to avoid artifacts
+            gl_Position = vec4(0.0, 0.0, 0.0, 0.0); // clip outside FOV to avoid artifacts
             return;
         }
         float r = theta / max_theta;
@@ -232,13 +236,17 @@ void main() {
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
         vec3 dir = normalize(-view_pos.xyz);
+        if (dir.z <= 0.0) { // behind camera -> clip
+            gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
         float az = atan(dir.x, dir.z);                      // [-pi, pi]
         float el = asin(clamp(dir.y, -1.0, 1.0));           // [-pi/2, pi/2]
 
         float half_fov_x = max(u_fovX * 0.5, 1e-6);
         float half_fov_y = max(u_fovY * 0.5, 1e-6);
         if (abs(az) > half_fov_x || abs(el) > half_fov_y) {
-            gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // clip outside FOV
+            gl_Position = vec4(0.0, 0.0, 0.0, 0.0); // clip outside FOV
             return;
         }
         vec2 ndc;
@@ -1232,6 +1240,9 @@ def main():
         if keys[pygame.K_q]:
             running = False
 
+        prev_x, prev_y = x, y
+        prev_cam_x, prev_cam_y = camera_x, camera_y
+
         # fly behaviour
         if USE_AUTOMATIC_FLY:
             moving = False
@@ -1309,6 +1320,8 @@ def main():
                 scale_back = ARENA_RADIUS_MM / r_center
                 x *= scale_back
                 y *= scale_back
+            if math.hypot(x - camera_x, y - camera_y) < min_cam_fly_dist:
+                x, y = prev_x, prev_y
 
         # camera controls
         cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
@@ -1335,6 +1348,8 @@ def main():
             scale_back_cam = ARENA_RADIUS_MM / r_cam_center
             camera_x *= scale_back_cam
             camera_y *= scale_back_cam
+        if math.hypot(camera_x - x, camera_y - y) < min_cam_fly_dist:
+            camera_x, camera_y = prev_cam_x, prev_cam_y
         # If camera moves into fly, push the fly away (do not move camera)
         x, y = enforce_min_distance((x, y), (camera_x, camera_y), min_cam_fly_dist)
         r_center = math.hypot(x, y)
