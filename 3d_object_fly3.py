@@ -66,20 +66,18 @@ else:
 
 # target physical length of fly (longest dimension of mesh) in arena mm
 FLY_PHYS_LENGTH_MM = 3.0
-FLY_BASE_SCALE     = 3  # extra multiplier if you want it bigger/smaller later
+FLY_BASE_SCALE     = 1  # extra multiplier if you want it bigger/smaller later
 FLY_MODEL_YAW_OFFSET_DEG = 0  # rotate model so its nose faces motion direction
 
-# Apparent-distance scaling: scale factor = (screen distance) / (apparent distance)
-# to preserve angular size without changing projection/FOV. Applied in model matrix only.
-SCREEN_DISTANCE_MM       = 40.0   # fixed physical eye→screen distance
-FLY_APPARENT_DISTANCE_MM = 10.0   # perceived distance that sets angular size
-DIST_SCALE_SMOOTH_HZ     = 8.0    # smoothing rate for scale factor to avoid pops
+SCREEN_DISTANCE_MM       = 40.0  # fixed physical eye→screen distance (mm)
+FLY_APPARENT_DISTANCE_MM = 10.0  # perceived distance target (mm) for angular size
+DIST_SCALE_SMOOTH_HZ     = 8.0   # smoothing rate for scale to avoid pops
 
 FLY_BODY_RADIUS_MM = 0.5 * FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE
 CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM  # treat camera as a second fly for overlap avoidance
 MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
-MIN_CAM_FLY_DIST_MM = 5.5
-MIN_DIST_ADJ_STEP_MM = 1  # step for live min-distance tuning (keys -/=)
+MIN_CAM_FLY_DIST_MM = 1.5
+MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
 
 BG_COLOR = (255, 255, 255)  # BGR
 TARGET_FPS = 60
@@ -93,7 +91,7 @@ LIGHT_MAX_GAIN = 4.0             # clamp on total light gain
 ARENA_RADIUS_MM = 40
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
-CAM_HEIGHT_MM   = 2.89
+CAM_HEIGHT_MM   = 0.89
 
 SPEED_MM_S       = 20
 BACK_MM_S        = SPEED_MM_S * 0.64
@@ -138,7 +136,7 @@ MINIMAP_HZ   = 60
 USE_AUTOMATIC_FLY = True
 
 AUTO_MEAN_RUN_DUR   = 1.0
-AUTO_MEAN_PAUSE_DUR = 1.5
+AUTO_MEAN_PAUSE_DUR = 0.7
 AUTO_TURN_STD_DEG   = 80.0
 AUTO_EDGE_TURN_DEG  = 120.0
 AUTO_EDGE_THRESH    = 0.8 * ARENA_RADIUS_MM
