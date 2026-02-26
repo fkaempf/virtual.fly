@@ -63,10 +63,10 @@ else:
 if is_mac:
     FLY_MODEL_PATH = Path("/Users/fkampf/Documents/virtual.fly/testmodel.glb")
 else:
-    FLY_MODEL_PATH = Path(r"D:\virtual.fly\testmodel.glb")
+    FLY_MODEL_PATH = Path(r"D:\virtual.fly\fly.glb")
 
 # target physical length of fly (longest dimension of mesh) in arena mm
-FLY_PHYS_LENGTH_MM = 1
+FLY_PHYS_LENGTH_MM = 3
 FLY_BASE_SCALE     = 1  # extra multiplier if you want it bigger/smaller later
 FLY_MODEL_YAW_OFFSET_DEG = 0  # rotate model so its nose faces motion direction
 
@@ -76,7 +76,7 @@ DIST_SCALE_SMOOTH_HZ     = 8.0   # smoothing rate for scale to avoid pops
 DEBUG_SCALE_LOG_INTERVAL = 1.0   # seconds between scale/geometry debug prints (set 0 to disable)
 DEBUG_PHOTO_WIDTH_PX     = 2512  # target photo/screenshot width for expected-pixel calc
 DEBUG_PHOTO_HEIGHT_PX    = 1876  # target photo/screenshot height for expected-pixel calc
-DEBUG_ENABLED            = True  # set False to silence debug prints
+DEBUG_ENABLED            = False  # set False to silence debug prints
 
 FLY_BODY_RADIUS_MM = 0.5 * FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE
 CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM  # treat camera as a second fly for overlap avoidance
@@ -138,7 +138,7 @@ TRAIL_COLOR  = (255, 200, 0)
 TRAIL_THICK  = 2
 MINIMAP_HZ   = 60
 
-USE_AUTOMATIC_FLY = False
+USE_AUTOMATIC_FLY = True
 
 AUTO_MEAN_RUN_DUR   = 1.0
 AUTO_MEAN_PAUSE_DUR = 0.7
