@@ -138,7 +138,7 @@ TRAIL_COLOR  = (255, 200, 0)
 TRAIL_THICK  = 2
 MINIMAP_HZ   = 60
 
-USE_AUTOMATIC_FLY = True
+USE_AUTOMATIC_FLY = False
 
 AUTO_MEAN_RUN_DUR   = 1.0
 AUTO_MEAN_PAUSE_DUR = 0.7
@@ -224,48 +224,38 @@ void main() {
     v_uv = in_uv;
 
     if (u_projMode == 1) {
-        vec3 dir = normalize(-view_pos.xyz); // camera looks down -Z; use forward as +Z in this space
-        if (dir.z <= 0.0) { // behind camera -> clip
-            gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
-            return;
-        }
-        float theta = acos(clamp(dir.z, -1.0, 1.0)); // polar angle from forward
+        gl_ClipDistance[0] = -view_pos.z;
+
+        vec3 dir = normalize(-view_pos.xyz);
+        float theta = acos(clamp(dir.z, -1.0, 1.0));
         float max_theta = 0.5 * max(u_fovX, u_fovY);
-        if (theta > max_theta) {
-            gl_Position = vec4(0.0, 0.0, 0.0, 0.0); // clip outside FOV to avoid artifacts
-            return;
-        }
-        float r = theta / max_theta;
+        float r = min(theta / max(max_theta, 1e-6), 4.0);
 
         float len_xy = length(dir.xy);
         vec2 dir_xy_norm = (len_xy > 1e-6) ? dir.xy / len_xy : vec2(0.0, 0.0);
-        vec2 proj = r * vec2(dir_xy_norm.x, -dir_xy_norm.y); // flip Y to keep fly upright
+        vec2 proj = r * vec2(dir_xy_norm.x, -dir_xy_norm.y);
 
-        float depth = -view_pos.z / u_far; // simple linear depth
+        float depth = clamp(-view_pos.z / u_far, -1.0, 1.0);
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
-        vec3 dir = normalize(-view_pos.xyz);
-        if (dir.z <= 0.0) { // behind camera -> clip
-            gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
-            return;
-        }
-        float az = atan(dir.x, dir.z);                      // [-pi, pi]
-        float el = asin(clamp(dir.y, -1.0, 1.0));           // [-pi/2, pi/2]
+        gl_ClipDistance[0] = -view_pos.z;
 
+        vec3 dir = normalize(-view_pos.xyz);
         float half_fov_x = max(u_fovX * 0.5, 1e-6);
         float half_fov_y = max(u_fovY * 0.5, 1e-6);
-        if (abs(az) > half_fov_x || abs(el) > half_fov_y) {
-            gl_Position = vec4(0.0, 0.0, 0.0, 0.0); // clip outside FOV
-            return;
-        }
+        float az = atan(dir.x, dir.z);
+        float el = asin(clamp(dir.y, -1.0, 1.0));
+
         vec2 ndc;
         ndc.x = az / half_fov_x;
-        ndc.y = -el / half_fov_y; // keep +Y up in NDC
+        ndc.y = -el / half_fov_y;
+        ndc = clamp(ndc, -4.0, 4.0);
 
-        float depth = -view_pos.z / u_far;
+        float depth = clamp(-view_pos.z / u_far, -1.0, 1.0);
         gl_Position = vec4(ndc.x, ndc.y, depth, 1.0);
     } else {
         gl_Position = u_mvp * vec4(in_pos, 1.0);
+        gl_ClipDistance[0] = 1.0;
     }
 }
 """
@@ -977,6 +967,7 @@ def main():
     GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
     GL.glViewport(0, 0, proj_w, proj_h)
     GL.glDisable(GL.GL_DEPTH_TEST)
+    GL.glEnable(GL.GL_CLIP_DISTANCE0)
 
     # warp quad program
     prog = create_program(VERT_SRC, FRAG_SRC)
@@ -1439,6 +1430,7 @@ def main():
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fly_fbo)
         GL.glViewport(0, 0, cam_w, cam_h)
         GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_CLIP_DISTANCE0)
         GL.glClearColor(BG_COLOR[2] / 255.0, BG_COLOR[1] / 255.0, BG_COLOR[0] / 255.0, 1.0)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
@@ -1483,6 +1475,7 @@ def main():
 
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_CLIP_DISTANCE0)
 
         # warp / unwarp pass
         GL.glViewport(0, 0, proj_w, proj_h)
