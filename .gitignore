@@ -1,2 +1,8 @@
 *.glb
 *.gbl
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.ply
+*.npy
