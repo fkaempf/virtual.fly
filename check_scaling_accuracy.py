@@ -56,14 +56,14 @@ if is_mac:
     MAPX_PATH = Path("/Users/fkampf/Documents/screen.calibration/configs/camera.projector.mapping/mapx.experimental.npy")
     MAPY_PATH = Path("/Users/fkampf/Documents/screen.calibration/configs/camera.projector.mapping/mapy.experimental.npy")
 else:
-    MAPX_PATH = Path(r"D:/screen.calibration/configs/camera.projector.mapping/mapx.experimental.npy")
-    MAPY_PATH = Path(r"D:/screen.calibration/configs/camera.projector.mapping/mapy.experimental.npy")
+    MAPX_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapx.experimental.npy")
+    MAPY_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapy.experimental.npy")
 
 # 3D fly model path (GLB from Blender)
 if is_mac:
-    FLY_MODEL_PATH = Path("/Users/fkampf/Documents/virtual.fly/testmodel.glb")
+    FLY_MODEL_PATH = Path("/Users/fkampf/Documents/virtual.fly/fly.glb")
 else:
-    FLY_MODEL_PATH = Path(r"D:\virtual.fly\testmodel.glb")
+    FLY_MODEL_PATH = Path(rf"C:\Users\VR-Behaviour\virtual.fly\fly.glb")
 
 # target physical length of fly (longest dimension of mesh) in arena mm
 FLY_PHYS_LENGTH_MM = 1
