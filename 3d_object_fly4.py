@@ -81,7 +81,7 @@ DEBUG_ENABLED            = False  # set False to silence debug prints
 FLY_BODY_RADIUS_MM = 0.5 * FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE
 CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM  # treat camera as a second fly for overlap avoidance
 MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
-MIN_CAM_FLY_DIST_MM = 1.0
+MIN_CAM_FLY_DIST_MM = 1.5
 MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
 COLLISION_NUDGE_MM   = 0.1  # how far to push apart on collision (mm)
 
@@ -116,7 +116,7 @@ HEIGHT_ADJ_STEP_MM     = 0.5  # step size for live height tuning when tapping th
 
 # FicTrac closed-loop camera control
 FICTRAC_HOST         = "127.0.0.1"
-FICTRAC_PORT         = 2001
+FICTRAC_PORT         = 2000
 FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock_port are read from it
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
@@ -1464,6 +1464,7 @@ def main():
             print(f"FicTrac config: {ft_cfg} not found, using defaults")
     fictrac = FicTracReader(ft_host, ft_port, FICTRAC_BALL_RADIUS_MM)
     use_fictrac = fictrac.connected  # auto-detect; keyboard fallback if not running
+    fictrac_paused = False  # F key temporarily pauses FicTrac, uses keyboard instead
     show_help = False  # F1 toggles hotkey help overlay
 
     # warp toggle: True = warped, False = raw camera texture
@@ -1498,6 +1499,9 @@ def main():
                     print(f"USE_AUTOMATIC_FLY={USE_AUTOMATIC_FLY}")
                 elif event.key == pygame.K_p and USE_AUTOMATIC_FLY:
                     artificial_paused = not artificial_paused
+                elif event.key == pygame.K_f:
+                    fictrac_paused = not fictrac_paused
+                    print(f"FicTrac paused: {fictrac_paused}")
                 elif event.key == pygame.K_F1:
                     show_help = not show_help
                 elif event.key == pygame.K_u:
@@ -1625,8 +1629,8 @@ def main():
                     x += COLLISION_NUDGE_MM * (x - camera_x) / sep
                     y += COLLISION_NUDGE_MM * (y - camera_y) / sep
 
-        # camera controls — FicTrac or keyboard fallback
-        if use_fictrac and fictrac.poll():
+        # camera controls — FicTrac (F key to temporarily pause) or keyboard fallback
+        if use_fictrac and not fictrac_paused and fictrac.poll():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
             dx = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
             dy = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
@@ -1790,6 +1794,7 @@ def main():
             cv2.imshow("minimap", map_img)
 
         # cv2 keyboard input (works when minimap/help window has focus)
+        # Note: cv2.waitKeyEx pumps the cv2 event loop; must be called every frame
         cv_key = cv2.waitKeyEx(1)
         if cv_key != -1:
             cv_lo = cv_key & 0xFF
@@ -1811,6 +1816,9 @@ def main():
             elif cv_lo == ord('0'):
                 yaw_offset_deg += YAW_ADJ_STEP_DEG
                 update_caption()
+            elif cv_lo == ord('f'):
+                fictrac_paused = not fictrac_paused
+                print(f"FicTrac paused: {fictrac_paused}")
             elif cv_lo == ord('h'):
                 show_help = not show_help
             elif cv_lo == ord('-'):
@@ -1853,7 +1861,12 @@ def main():
 
         # Help overlay (separate cv2 window, toggle with H)
         if show_help:
-            ft_status = f"ON ({ft_host}:{ft_port})" if fictrac.connected else "OFF (keyboard)"
+            if not fictrac.connected:
+                ft_status = "OFF (keyboard)"
+            elif fictrac_paused:
+                ft_status = f"PAUSED (F to resume) {ft_host}:{ft_port}"
+            else:
+                ft_status = f"listening {ft_host}:{ft_port}"
             help_img = np.full((280, 400, 3), 30, dtype=np.uint8)
             help_lines = [
                 "--- HOTKEYS ---",
@@ -1861,6 +1874,7 @@ def main():
                 "Arrows: move/turn camera",
                 "A: toggle auto-fly",
                 "P: pause auto-fly",
+                "F: pause FicTrac (keyboard cam)",
                 "U: toggle warp",
                 "H: toggle this help",
                 "9/0: yaw offset",
