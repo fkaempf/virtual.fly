@@ -31,7 +31,7 @@ Configuration / input knobs (all module-level):
 - AUTO_EDGE_THRESH: radius threshold (fraction of arena) to begin edge avoidance behavior.
 """
 
-import os, sys, math, time, ctypes, base64
+import os, sys, math, time, ctypes, base64, socket, select
 from collections import deque
 from pathlib import Path
 
@@ -114,6 +114,13 @@ CAMERA_Z_SPEED_MM_S    = SPEED_MM_S
 YAW_ADJ_STEP_DEG       = 5.0  # step size for live yaw offset tuning (keys 9/0)
 HEIGHT_ADJ_STEP_MM     = 0.5  # step size for live height tuning when tapping the height keys
 
+# FicTrac closed-loop camera control
+FICTRAC_HOST         = "127.0.0.1"
+FICTRAC_PORT         = 2001
+FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
+FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
+FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation
+
 
 # 3D fly camera FOV (sane perspective, independent of arena FOV)
 # If FLY_CAM_FOV_X_DEG is not None, vertical FOV will be derived from it and the camera aspect.
@@ -146,6 +153,93 @@ AUTO_MEAN_PAUSE_DUR = 0.7
 AUTO_TURN_STD_DEG   = 80.0
 AUTO_EDGE_TURN_DEG  = 120.0
 AUTO_EDGE_THRESH    = 0.8 * ARENA_RADIUS_MM
+
+# ----------------- FICTRAC -----------------
+
+class FicTracReader:
+    """Non-blocking UDP reader for FicTrac closed-loop data."""
+    def __init__(self, host, port, ball_radius_mm):
+        self.ball_radius = ball_radius_mm
+        self.sock = None
+        self.buf = ""
+        self.connected = False
+        self.heading = 0.0    # integrated heading (radians)
+        self.pos_x = 0.0      # integrated x position (mm)
+        self.pos_y = 0.0      # integrated y position (mm)
+        self.speed = 0.0      # instantaneous speed (mm/s)
+        self.prev_heading = 0.0
+        self.prev_pos_x = 0.0
+        self.prev_pos_y = 0.0
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.bind((host, port))
+            self.sock.setblocking(0)
+            self.connected = True
+            print(f"FicTrac: listening on {host}:{port}")
+        except OSError as e:
+            print(f"FicTrac: could not bind {host}:{port} ({e}), using keyboard")
+            self.connected = False
+
+    def poll(self):
+        """Read latest FicTrac data. Returns True if new data was received."""
+        if not self.connected:
+            return False
+        got_data = False
+        try:
+            while True:
+                ready = select.select([self.sock], [], [], 0)
+                if not ready[0]:
+                    break
+                raw = self.sock.recv(4096)
+                if not raw:
+                    break
+                self.buf += raw.decode("UTF-8", errors="replace")
+                got_data = True
+        except (BlockingIOError, OSError):
+            pass
+        if not got_data:
+            return False
+        # Process the LAST complete line (most recent frame)
+        lines = self.buf.split("\n")
+        self.buf = lines[-1]  # keep incomplete tail
+        last_line = None
+        for line in reversed(lines[:-1]):
+            line = line.strip()
+            if line:
+                last_line = line
+                break
+        if last_line is None:
+            return False
+        toks = last_line.split(", ")
+        # Handle both socket format (starts with "FT") and raw format
+        offset = 1 if len(toks) > 0 and toks[0] == "FT" else 0
+        if len(toks) < offset + 22:
+            return False
+        try:
+            self.prev_heading = self.heading
+            self.prev_pos_x = self.pos_x
+            self.prev_pos_y = self.pos_y
+            self.pos_x = float(toks[offset + 14]) * self.ball_radius  # col 15
+            self.pos_y = float(toks[offset + 15]) * self.ball_radius  # col 16
+            self.heading = float(toks[offset + 16])                   # col 17
+            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19
+        except (ValueError, IndexError):
+            return False
+        return True
+
+    def delta_heading(self):
+        return self.heading - self.prev_heading
+
+    def delta_x(self):
+        return self.pos_x - self.prev_pos_x
+
+    def delta_y(self):
+        return self.pos_y - self.prev_pos_y
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+
 
 # ----------------- SHADERS -----------------
 
@@ -1270,6 +1364,11 @@ def main():
     running = True
     next_minimap_t = 0.0
 
+    # FicTrac closed-loop camera control
+    fictrac = FicTracReader(FICTRAC_HOST, FICTRAC_PORT, FICTRAC_BALL_RADIUS_MM)
+    use_fictrac = fictrac.connected  # auto-detect; keyboard fallback if not running
+    show_help = False  # F1 toggles hotkey help overlay
+
     # warp toggle: True = warped, False = raw camera texture
     use_warp = True
 
@@ -1297,8 +1396,13 @@ def main():
             if event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     running = False
+                elif event.key == pygame.K_a:
+                    USE_AUTOMATIC_FLY = not USE_AUTOMATIC_FLY
+                    print(f"USE_AUTOMATIC_FLY={USE_AUTOMATIC_FLY}")
                 elif event.key == pygame.K_p and USE_AUTOMATIC_FLY:
                     artificial_paused = not artificial_paused
+                elif event.key == pygame.K_F1:
+                    show_help = not show_help
                 elif event.key == pygame.K_u:
                     use_warp = not use_warp  # toggle warp
                 elif event.key == pygame.K_9:
@@ -1424,21 +1528,27 @@ def main():
                     x += COLLISION_NUDGE_MM * (x - camera_x) / sep
                     y += COLLISION_NUDGE_MM * (y - camera_y) / sep
 
-        # camera controls
-        cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
-        cam_current_turn_rate = cam_turn_rate_rad * (CAMERA_STAND_TURN_MULT if not cam_moving else 1.0)
-
-        if keys[pygame.K_LEFT]:
-            cam_heading -= cam_current_turn_rate * dt  # left arrow turns view left
-        if keys[pygame.K_RIGHT]:
-            cam_heading += cam_current_turn_rate * dt  # right arrow turns view right
-
-        if keys[pygame.K_UP]:
-            camera_x += CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
-            camera_y += CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
-        if keys[pygame.K_DOWN]:
-            camera_x -= CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
-            camera_y -= CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
+        # camera controls — FicTrac or keyboard fallback
+        if use_fictrac and fictrac.poll():
+            dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
+            dx = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
+            dy = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
+            cam_heading += dh
+            camera_x += dx
+            camera_y += dy
+        else:
+            cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
+            cam_current_turn_rate = cam_turn_rate_rad * (CAMERA_STAND_TURN_MULT if not cam_moving else 1.0)
+            if keys[pygame.K_LEFT]:
+                cam_heading -= cam_current_turn_rate * dt
+            if keys[pygame.K_RIGHT]:
+                cam_heading += cam_current_turn_rate * dt
+            if keys[pygame.K_UP]:
+                camera_x += CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
+                camera_y += CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
+            if keys[pygame.K_DOWN]:
+                camera_x -= CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
+                camera_y -= CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
         if keys[pygame.K_PERIOD]:
             cam_height += CAMERA_Z_SPEED_MM_S * dt
         if keys[pygame.K_COMMA]:
@@ -1580,9 +1690,28 @@ def main():
                 camera_y,
                 cam_heading,
             )
+            if show_help:
+                help_lines = [
+                    "--- HOTKEYS ---",
+                    "WASD: move fly",
+                    "Arrows: move camera",
+                    "A: toggle auto-fly",
+                    "P: pause auto-fly",
+                    "U: toggle warp",
+                    "9/0: yaw offset",
+                    "-/=: min distance",
+                    ",/.: camera height",
+                    "Q/Esc: quit",
+                    "F1: this help",
+                    f"FicTrac: {'ON' if use_fictrac else 'OFF'}",
+                ]
+                for i, line in enumerate(help_lines):
+                    cv2.putText(map_img, line, (10, 20 + i * 18),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 200), 1, cv2.LINE_AA)
             cv2.imshow("minimap", map_img)
             cv2.waitKey(1)
 
+    fictrac.close()
     tex_list = [warp_tex, cam_tex]
     for tex in draw_textures:
         if tex is not None:
