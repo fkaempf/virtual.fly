@@ -215,6 +215,7 @@ uniform int u_projMode; // 0 = perspective, 1 = equidistant fisheye (theta-propo
 out vec3 v_normal;
 out vec4 v_color;
 out vec2 v_uv;
+out vec3 v_viewPos;
 
 void main() {
     vec4 world_pos = u_model * vec4(in_pos, 1.0);
@@ -222,10 +223,9 @@ void main() {
     v_normal = mat3(u_model) * in_normal;
     v_color = in_color;
     v_uv = in_uv;
+    v_viewPos = view_pos.xyz;
 
     if (u_projMode == 1) {
-        gl_ClipDistance[0] = -view_pos.z;
-
         vec3 dir = normalize(-view_pos.xyz);
         float theta = acos(clamp(dir.z, -1.0, 1.0));
         float max_theta = 0.5 * max(u_fovX, u_fovY);
@@ -238,8 +238,6 @@ void main() {
         float depth = clamp(-view_pos.z / u_far, -1.0, 1.0);
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
-        gl_ClipDistance[0] = -view_pos.z;
-
         vec3 dir = normalize(-view_pos.xyz);
         float half_fov_x = max(u_fovX * 0.5, 1e-6);
         float half_fov_y = max(u_fovY * 0.5, 1e-6);
@@ -255,7 +253,6 @@ void main() {
         gl_Position = vec4(ndc.x, ndc.y, depth, 1.0);
     } else {
         gl_Position = u_mvp * vec4(in_pos, 1.0);
-        gl_ClipDistance[0] = 1.0;
     }
 }
 """
@@ -266,6 +263,7 @@ FLY_FRAG_SRC = r"""
 in vec3 v_normal;
 in vec4 v_color;
 in vec2 v_uv;
+in vec3 v_viewPos;
 out vec4 fragColor;
 
 uniform vec4 u_baseColor;
@@ -275,8 +273,21 @@ uniform float u_ambient;
 uniform vec4 u_lightIntensities;
 uniform vec3 u_lightDirs[4];
 uniform float u_lightMaxGain;
+uniform int u_projMode;
+uniform float u_fovX;
+uniform float u_fovY;
 
 void main() {
+    // Per-fragment FOV discard using the true 3D position.
+    // v_viewPos interpolates linearly (w=1), giving the exact
+    // view-space position. atan of this gives exact azimuth per pixel.
+    if (u_projMode != 0) {
+        vec3 fdir = normalize(-v_viewPos);
+        float faz = atan(fdir.x, fdir.z);
+        float fel = asin(clamp(fdir.y, -1.0, 1.0));
+        if (abs(faz) > u_fovX * 0.5 || abs(fel) > u_fovY * 0.5) discard;
+    }
+
     vec3 N = normalize(v_normal);
 
     vec3 base = (v_color.rgb * u_baseColor.rgb);
@@ -967,7 +978,6 @@ def main():
     GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
     GL.glViewport(0, 0, proj_w, proj_h)
     GL.glDisable(GL.GL_DEPTH_TEST)
-    GL.glEnable(GL.GL_CLIP_DISTANCE0)
 
     # warp quad program
     prog = create_program(VERT_SRC, FRAG_SRC)
@@ -1430,7 +1440,6 @@ def main():
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fly_fbo)
         GL.glViewport(0, 0, cam_w, cam_h)
         GL.glEnable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_CLIP_DISTANCE0)
         GL.glClearColor(BG_COLOR[2] / 255.0, BG_COLOR[1] / 255.0, BG_COLOR[0] / 255.0, 1.0)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
@@ -1475,7 +1484,6 @@ def main():
 
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glDisable(GL.GL_CLIP_DISTANCE0)
 
         # warp / unwarp pass
         GL.glViewport(0, 0, proj_w, proj_h)
