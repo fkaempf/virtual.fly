@@ -117,6 +117,7 @@ HEIGHT_ADJ_STEP_MM     = 0.5  # step size for live height tuning when tapping th
 # FicTrac closed-loop camera control
 FICTRAC_HOST         = "127.0.0.1"
 FICTRAC_PORT         = 2000
+FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock_port are read from it
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
 FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation
@@ -1448,7 +1449,20 @@ def main():
     next_minimap_t = 0.0
 
     # FicTrac closed-loop camera control
-    fictrac = FicTracReader(FICTRAC_HOST, FICTRAC_PORT, FICTRAC_BALL_RADIUS_MM)
+    ft_host, ft_port = FICTRAC_HOST, FICTRAC_PORT
+    if FICTRAC_CONFIG:
+        ft_cfg = Path(FICTRAC_CONFIG)
+        if ft_cfg.exists():
+            for line in ft_cfg.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("sock_host"):
+                    ft_host = line.split(":")[1].strip()
+                elif line.startswith("sock_port"):
+                    ft_port = int(line.split(":")[1].strip())
+            print(f"FicTrac config: {ft_cfg} → {ft_host}:{ft_port}")
+        else:
+            print(f"FicTrac config: {ft_cfg} not found, using defaults")
+    fictrac = FicTracReader(ft_host, ft_port, FICTRAC_BALL_RADIUS_MM)
     use_fictrac = fictrac.connected  # auto-detect; keyboard fallback if not running
     show_help = False  # F1 toggles hotkey help overlay
 
