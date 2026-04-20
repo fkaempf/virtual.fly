@@ -89,8 +89,8 @@ BG_COLOR = (255, 255, 255)  # BGR
 TARGET_FPS = 60
 
 # Arena 3D geometry
-ARENA_FLOOR_COLOR    = (0.75, 0.75, 0.75)  # RGB float, light grey
-ARENA_WALL_COLOR     = (0.55, 0.55, 0.55)  # RGB float, darker grey
+ARENA_FLOOR_COLOR    = (0.22, 0.22, 0.22)  # RGB float, light grey (will be brightened by lighting)
+ARENA_WALL_COLOR     = (0.15, 0.15, 0.15)  # RGB float, darker grey
 ARENA_WALL_HEIGHT_MM = 5.0
 
 # Lighting (four directional lights from above: N, E, S, W)
@@ -155,7 +155,7 @@ CAM_TRAIL_COLOR  = (0, 180, 255)  # orange-ish BGR
 CAM_TRAIL_THICK  = 2
 MINIMAP_HZ   = 60
 
-USE_AUTOMATIC_FLY = False
+USE_AUTOMATIC_FLY = True
 
 AUTO_MEAN_RUN_DUR   = 1.0
 AUTO_MEAN_PAUSE_DUR = 0.7
@@ -1398,7 +1398,7 @@ def main():
     GL.glBindVertexArray(0)
 
     # Arena geometry (floor + walls)
-    arena_verts, arena_indices = build_arena_geometry(ARENA_RADIUS_MM, ARENA_WALL_HEIGHT_MM)
+    arena_verts, arena_indices = build_arena_geometry(ARENA_RADIUS_MM + 2, ARENA_WALL_HEIGHT_MM)
     arena_vao = GL.glGenVertexArrays(1)
     arena_vbo = GL.glGenBuffers(1)
     arena_ebo = GL.glGenBuffers(1)
