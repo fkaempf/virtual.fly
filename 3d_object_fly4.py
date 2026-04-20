@@ -1058,40 +1058,71 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_segments=64):
-    """Generate floor disc + wall cylinder as [N,12] verts and uint32 indices."""
-    # Floor disc (triangle fan from center)
+def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64, noise_std=0.03):
+    """Generate floor disc + wall cylinder with per-vertex color noise."""
+    rng = np.random.default_rng(42)  # fixed seed for reproducibility
+
+    # Floor disc (concentric rings subdivided into triangles)
     floor_verts = []
     floor_idx = []
-    # Center vertex
-    floor_verts.append([0, 0, 0,  0, 1, 0,  *ARENA_FLOOR_COLOR, 1,  0, 0])
-    for i in range(n_segments + 1):
-        a = 2 * math.pi * i / n_segments
-        x = radius * math.cos(a)
-        z = radius * math.sin(a)
-        floor_verts.append([x, 0, z,  0, 1, 0,  *ARENA_FLOOR_COLOR, 1,  0, 0])
-    for i in range(1, n_segments + 1):
-        floor_idx.extend([0, i, i + 1 if i < n_segments else 1])
+    fc = np.array(ARENA_FLOOR_COLOR, dtype=np.float64)
 
-    # Wall cylinder (quads as two triangles each)
+    # Center vertex
+    c = np.clip(fc + rng.normal(0, noise_std, 3), 0, 1)
+    floor_verts.append([0, 0, 0,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
+
+    # Ring vertices
+    for ri in range(1, n_rings + 1):
+        r = radius * ri / n_rings
+        for si in range(n_segments):
+            a = 2 * math.pi * si / n_segments
+            x = r * math.cos(a)
+            z = r * math.sin(a)
+            c = np.clip(fc + rng.normal(0, noise_std, 3), 0, 1)
+            floor_verts.append([x, 0, z,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
+
+    # Indices: center fan for first ring
+    for si in range(n_segments):
+        s_next = (si + 1) % n_segments
+        floor_idx.extend([0, 1 + si, 1 + s_next])
+
+    # Indices: quads between consecutive rings
+    for ri in range(1, n_rings):
+        inner_base = 1 + (ri - 1) * n_segments
+        outer_base = 1 + ri * n_segments
+        for si in range(n_segments):
+            s_next = (si + 1) % n_segments
+            i0 = inner_base + si
+            i1 = inner_base + s_next
+            o0 = outer_base + si
+            o1 = outer_base + s_next
+            floor_idx.extend([i0, o0, i1])
+            floor_idx.extend([i1, o0, o1])
+
+    # Wall cylinder with noise
+    wc = np.array(ARENA_WALL_COLOR, dtype=np.float64)
     wall_verts = []
     wall_idx = []
     base = len(floor_verts)
-    for i in range(n_segments + 1):
-        a = 2 * math.pi * i / n_segments
-        x = radius * math.cos(a)
-        z = radius * math.sin(a)
-        nx = math.cos(a)
-        nz = math.sin(a)
-        # Bottom vertex
-        wall_verts.append([x, 0, z,  -nx, 0, -nz,  *ARENA_WALL_COLOR, 1,  0, 0])
-        # Top vertex
-        wall_verts.append([x, wall_height, z,  -nx, 0, -nz,  *ARENA_WALL_COLOR, 1,  0, 0])
-    for i in range(n_segments):
-        b = base + i * 2
-        # Normals point inward (negative radial)
-        wall_idx.extend([b, b + 2, b + 1])
-        wall_idx.extend([b + 1, b + 2, b + 3])
+    n_wall_rows = 4  # vertical subdivisions for noise
+    for row in range(n_wall_rows + 1):
+        y = wall_height * row / n_wall_rows
+        for si in range(n_segments + 1):
+            a = 2 * math.pi * si / n_segments
+            x = radius * math.cos(a)
+            z = radius * math.sin(a)
+            nx = math.cos(a)
+            nz = math.sin(a)
+            c = np.clip(wc + rng.normal(0, noise_std, 3), 0, 1)
+            wall_verts.append([x, y, z,  -nx, 0, -nz,  c[0], c[1], c[2], 1,  0, 0])
+
+    cols = n_segments + 1
+    for row in range(n_wall_rows):
+        for si in range(n_segments):
+            b = base + row * cols + si
+            t = b + cols
+            wall_idx.extend([b, b + 1, t])
+            wall_idx.extend([t, b + 1, t + 1])
 
     verts = np.array(floor_verts + wall_verts, dtype=np.float32)
     idx = np.array(floor_idx + wall_idx, dtype=np.uint32)
