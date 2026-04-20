@@ -1665,6 +1665,50 @@ def main():
         GL.glBindTexture(GL.GL_TEXTURE_2D, warp_tex)
         GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
         GL.glBindVertexArray(0)
+
+        # Help overlay on main screen
+        if show_help:
+            if not hasattr(main, '_help_font'):
+                main._help_font = pygame.font.SysFont("consolas", 16)
+            font = main._help_font
+            help_lines = [
+                "--- HOTKEYS ---",
+                "WASD: move fly        Arrows: move camera",
+                "A: toggle auto-fly    P: pause auto-fly",
+                "U: toggle warp        F1: this help",
+                "9/0: yaw offset       -/=: min distance",
+                ",/.: camera height    Q/Esc: quit",
+                f"FicTrac: {'ON' if use_fictrac else 'OFF'}",
+                f"AutoFly: {'ON' if USE_AUTOMATIC_FLY else 'OFF'}",
+            ]
+            line_h = font.get_linesize()
+            tw = max(font.size(l)[0] for l in help_lines) + 20
+            th = line_h * len(help_lines) + 10
+            surf = pygame.Surface((tw, th), pygame.SRCALPHA)
+            surf.fill((0, 0, 0, 180))
+            for i, line in enumerate(help_lines):
+                txt = font.render(line, True, (255, 255, 255))
+                surf.blit(txt, (10, 5 + i * line_h))
+            # Upload to texture and draw as overlay
+            pixels = pygame.image.tostring(surf, "RGBA", True)
+            help_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, help_tex)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, tw, th, 0,
+                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixels)
+            GL.glEnable(GL.GL_BLEND)
+            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+            GL.glUseProgram(prog)
+            GL.glUniform1i(u_useWarp_loc, 0)  # passthrough
+            GL.glBindVertexArray(vao)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, help_tex)
+            GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+            GL.glBindVertexArray(0)
+            GL.glDisable(GL.GL_BLEND)
+            GL.glDeleteTextures([help_tex])
+
         pygame.display.flip()
 
         # minimap
@@ -1690,24 +1734,6 @@ def main():
                 camera_y,
                 cam_heading,
             )
-            if show_help:
-                help_lines = [
-                    "--- HOTKEYS ---",
-                    "WASD: move fly",
-                    "Arrows: move camera",
-                    "A: toggle auto-fly",
-                    "P: pause auto-fly",
-                    "U: toggle warp",
-                    "9/0: yaw offset",
-                    "-/=: min distance",
-                    ",/.: camera height",
-                    "Q/Esc: quit",
-                    "F1: this help",
-                    f"FicTrac: {'ON' if use_fictrac else 'OFF'}",
-                ]
-                for i, line in enumerate(help_lines):
-                    cv2.putText(map_img, line, (10, 20 + i * 18),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 200), 1, cv2.LINE_AA)
             cv2.imshow("minimap", map_img)
             cv2.waitKey(1)
 
