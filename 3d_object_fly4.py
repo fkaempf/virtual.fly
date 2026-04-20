@@ -102,7 +102,7 @@ LIGHT_MAX_GAIN = 4.0             # clamp on total light gain
 ARENA_RADIUS_MM = 40
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
-CAM_HEIGHT_MM   = 0.93
+CAM_HEIGHT_MM   = 2.84
 
 SPEED_MM_S       = 20
 BACK_MM_S        = SPEED_MM_S * 0.64
@@ -244,6 +244,7 @@ class FicTracReader:
         self.prev_heading = 0.0
         self.prev_pos_x = 0.0
         self.prev_pos_y = 0.0
+        self._first_frame = True  # skip first delta (jump from zero to current)
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.bind((host, port))
@@ -1518,6 +1519,7 @@ def main():
     artificial_paused = False
 
     yaw_offset_deg = float(FLY_MODEL_YAW_OFFSET_DEG)
+    fly_y_adjust = 0.0  # manual height adjustment for conspecific model (mm)
     min_cam_fly_dist = float(MIN_CAM_FLY_DIST_MM)
     screen_distance_mm = float(SCREEN_DISTANCE_MM)
     next_scale_log_t = 0.0
@@ -1759,6 +1761,18 @@ def main():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
             dx_raw = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
             dy_raw = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
+            # Accumulate for averaged debug print
+            if not hasattr(main, '_ft_acc'):
+                main._ft_acc = [0.0, 0.0, 0.0, 0, 0.0]  # sum_dh, sum_dx, sum_dy, count, next_t
+            main._ft_acc[0] += dh
+            main._ft_acc[1] += dx_raw
+            main._ft_acc[2] += dy_raw
+            main._ft_acc[3] += 1
+            if now >= main._ft_acc[4]:
+                n = max(main._ft_acc[3], 1)
+                r = math.hypot(camera_x, camera_y)
+                print(f"FT avg/0.5s: dh={main._ft_acc[0]:.4f} dx={main._ft_acc[1]:.4f} dy={main._ft_acc[2]:.4f} (n={n}) cam=({camera_x:.1f},{camera_y:.1f}) r={r:.1f}/{ARENA_RADIUS_MM} h={cam_heading:.3f}")
+                main._ft_acc = [0.0, 0.0, 0.0, 0, now + 0.5]
             # Rotate FicTrac deltas into camera-relative direction
             cos_h = math.cos(cam_heading)
             sin_h = math.sin(cam_heading)
@@ -1783,11 +1797,13 @@ def main():
         if keys[pygame.K_COMMA]:
             cam_height -= CAMERA_Z_SPEED_MM_S * dt
 
-        r_cam_center = math.hypot(camera_x, camera_y)
-        if r_cam_center > ARENA_RADIUS_MM:
-            push_scale_cam = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_cam_center
-            camera_x *= push_scale_cam
-            camera_y *= push_scale_cam
+        # Arena boundary for camera (skip when FicTrac controls it)
+        if not (use_fictrac and not fictrac_paused):
+            r_cam_center = math.hypot(camera_x, camera_y)
+            if r_cam_center > ARENA_RADIUS_MM:
+                push_scale_cam = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_cam_center
+                camera_x *= push_scale_cam
+                camera_y *= push_scale_cam
         col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                        fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
         if col:
