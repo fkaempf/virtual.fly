@@ -116,7 +116,7 @@ HEIGHT_ADJ_STEP_MM     = 0.5  # step size for live height tuning when tapping th
 
 # FicTrac closed-loop camera control
 FICTRAC_HOST         = "127.0.0.1"
-FICTRAC_PORT         = 2001
+FICTRAC_PORT         = 2000
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
 FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation
@@ -1190,6 +1190,23 @@ def main():
     base_title = "GPU-warped 3D fly (GLB)"
     pygame.display.set_caption(base_title)
 
+    # Prevent projector window from stealing focus (Windows only)
+    if not is_mac:
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = pygame.display.get_wm_info()["window"]
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_NOACTIVATE = 0x08000000
+            WS_EX_APPWINDOW = 0x00040000
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style = (style | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            print("Projector window set to no-activate (click minimap for input)")
+        except Exception as e:
+            print(f"Could not set no-activate: {e}")
+
     GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
     GL.glViewport(0, 0, proj_w, proj_h)
     GL.glDisable(GL.GL_DEPTH_TEST)
@@ -1758,29 +1775,67 @@ def main():
             )
             cv2.imshow("minimap", map_img)
 
-        # cv2 keyboard input (works when minimap has focus)
-        cv_key = cv2.waitKey(1) & 0xFF
-        if cv_key != 255:
-            # Duplicate the pygame key handling for cv2 window
-            if cv_key == 27:  # Esc
+        # cv2 keyboard input (works when minimap/help window has focus)
+        cv_key = cv2.waitKeyEx(1)
+        if cv_key != -1:
+            cv_lo = cv_key & 0xFF
+            # Toggle actions
+            if cv_lo == 27:  # Esc
                 running = False
-            elif cv_key == ord('q'):
+            elif cv_lo == ord('q'):
                 running = False
-            elif cv_key == ord('a'):
+            elif cv_lo == ord('a'):
                 USE_AUTOMATIC_FLY = not USE_AUTOMATIC_FLY
                 print(f"USE_AUTOMATIC_FLY={USE_AUTOMATIC_FLY}")
-            elif cv_key == ord('p') and USE_AUTOMATIC_FLY:
+            elif cv_lo == ord('p') and USE_AUTOMATIC_FLY:
                 artificial_paused = not artificial_paused
-            elif cv_key == ord('u'):
+            elif cv_lo == ord('u'):
                 use_warp = not use_warp
-            elif cv_key == ord('9'):
+            elif cv_lo == ord('9'):
                 yaw_offset_deg -= YAW_ADJ_STEP_DEG
                 update_caption()
-            elif cv_key == ord('0'):
+            elif cv_lo == ord('0'):
                 yaw_offset_deg += YAW_ADJ_STEP_DEG
                 update_caption()
-            elif cv_key == ord('h'):
+            elif cv_lo == ord('h'):
                 show_help = not show_help
+            elif cv_lo == ord('-'):
+                min_cam_fly_dist = max(0.0, min_cam_fly_dist - MIN_DIST_ADJ_STEP_MM)
+                update_caption()
+            elif cv_lo == ord('='):
+                min_cam_fly_dist += MIN_DIST_ADJ_STEP_MM
+                update_caption()
+            elif cv_lo == ord('.'):
+                cam_height += HEIGHT_ADJ_STEP_MM
+                update_caption()
+            elif cv_lo == ord(','):
+                cam_height -= HEIGHT_ADJ_STEP_MM
+                update_caption()
+            # Movement (step-based from minimap, held from pygame)
+            step_mm = SPEED_MM_S * dt * 3  # larger step for tap-based input
+            step_rad = math.radians(TURN_DEG_S) * dt * 3
+            cam_step = CAMERA_SPEED_MM_S * dt * 3
+            cam_turn = math.radians(CAMERA_TURN_DEG_S) * dt * 3
+            if cv_lo == ord('w'):
+                x += step_mm * math.sin(heading)
+                y += step_mm * math.cos(heading)
+            elif cv_lo == ord('s'):
+                x -= step_mm * math.sin(heading)
+                y -= step_mm * math.cos(heading)
+            elif cv_lo == ord('d'):
+                heading += step_rad
+            elif cv_lo == ord('f'):
+                heading -= step_rad
+            elif cv_key == 2490368:  # Up arrow
+                camera_x += cam_step * math.sin(cam_heading)
+                camera_y += cam_step * math.cos(cam_heading)
+            elif cv_key == 2621440:  # Down arrow
+                camera_x -= cam_step * math.sin(cam_heading)
+                camera_y -= cam_step * math.cos(cam_heading)
+            elif cv_key == 2424832:  # Left arrow
+                cam_heading -= cam_turn
+            elif cv_key == 2555904:  # Right arrow
+                cam_heading += cam_turn
 
         # Help overlay (separate cv2 window, toggle with H)
         if show_help:
