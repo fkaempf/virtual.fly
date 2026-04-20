@@ -1398,7 +1398,9 @@ def main():
     GL.glBindVertexArray(0)
 
     # Arena geometry (floor + walls)
-    arena_verts, arena_indices = build_arena_geometry(ARENA_RADIUS_MM + 2, ARENA_WALL_HEIGHT_MM)
+    # Wall at movement boundary + fly half-length + 2mm margin to avoid clipping
+    arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 2.0
+    arena_verts, arena_indices = build_arena_geometry(arena_wall_radius, ARENA_WALL_HEIGHT_MM)
     arena_vao = GL.glGenVertexArrays(1)
     arena_vbo = GL.glGenBuffers(1)
     arena_ebo = GL.glGenBuffers(1)
