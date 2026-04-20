@@ -1058,8 +1058,9 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64, noise_std=0.03):
-    """Generate floor disc + wall cylinder with per-vertex color noise."""
+def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
+                         floor_noise_std=0.03, wall_noise_std=0.02):
+    """Generate floor disc + wall cylinder with per-vertex greyscale noise."""
     rng = np.random.default_rng(42)  # fixed seed for reproducibility
 
     # Floor disc (concentric rings subdivided into triangles)
@@ -1068,7 +1069,8 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64, noise_s
     fc = np.array(ARENA_FLOOR_COLOR, dtype=np.float64)
 
     # Center vertex
-    c = np.clip(fc + rng.normal(0, noise_std, 3), 0, 1)
+    n = float(np.clip(rng.normal(0, floor_noise_std), -0.1, 0.1))
+    c = np.clip(fc + n, 0, 1)
     floor_verts.append([0, 0, 0,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
 
     # Ring vertices
@@ -1078,7 +1080,8 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64, noise_s
             a = 2 * math.pi * si / n_segments
             x = r * math.cos(a)
             z = r * math.sin(a)
-            c = np.clip(fc + rng.normal(0, noise_std, 3), 0, 1)
+            n = float(np.clip(rng.normal(0, floor_noise_std), -0.1, 0.1))
+            c = np.clip(fc + n, 0, 1)  # same offset for R,G,B = greyscale
             floor_verts.append([x, 0, z,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
 
     # Indices: center fan for first ring
@@ -1113,7 +1116,8 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64, noise_s
             z = radius * math.sin(a)
             nx = math.cos(a)
             nz = math.sin(a)
-            c = np.clip(wc + rng.normal(0, noise_std, 3), 0, 1)
+            n = float(np.clip(rng.normal(0, wall_noise_std), -0.1, 0.1))
+            c = np.clip(wc + n, 0, 1)  # greyscale noise
             wall_verts.append([x, y, z,  -nx, 0, -nz,  c[0], c[1], c[2], 1,  0, 0])
 
     cols = n_segments + 1
@@ -1434,7 +1438,7 @@ def main():
 
     # Arena geometry (floor + walls)
     # Wall at movement boundary + fly half-length + 2mm margin to avoid clipping
-    arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 2.0
+    arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 1.0
     arena_verts, arena_indices = build_arena_geometry(arena_wall_radius, ARENA_WALL_HEIGHT_MM)
     arena_vao = GL.glGenVertexArrays(1)
     arena_vbo = GL.glGenBuffers(1)
@@ -1699,9 +1703,10 @@ def main():
 
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
-                scale_back = ARENA_RADIUS_MM / r_center
-                x *= scale_back
-                y *= scale_back
+                # Push inward by nudge amount
+                push_scale = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_center
+                x *= push_scale
+                y *= push_scale
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
@@ -1737,9 +1742,9 @@ def main():
 
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
-                scale_back = ARENA_RADIUS_MM / r_center
-                x *= scale_back
-                y *= scale_back
+                push_scale = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_center
+                x *= push_scale
+                y *= push_scale
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                              fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
             if col:
@@ -1780,9 +1785,9 @@ def main():
 
         r_cam_center = math.hypot(camera_x, camera_y)
         if r_cam_center > ARENA_RADIUS_MM:
-            scale_back_cam = ARENA_RADIUS_MM / r_cam_center
-            camera_x *= scale_back_cam
-            camera_y *= scale_back_cam
+            push_scale_cam = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_cam_center
+            camera_x *= push_scale_cam
+            camera_y *= push_scale_cam
         col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                        fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
         if col:
@@ -1847,7 +1852,8 @@ def main():
         # Adding pi turns the nose 180° (from -Z to +Z), then heading aligns it.
         yaw = heading + math.pi + math.radians(yaw_offset_deg)
         base_rot = mat4_rotate_y(yaw)
-        model_mat = mat4_translate(x, 0.0, y) @ base_rot @ mat4_scale(fly_scale_current)
+        fly_y_offset = float(extents[1]) * 0.5 * fly_scale_current  # lift fly so bottom touches floor
+        model_mat = mat4_translate(x, fly_y_offset, y) @ base_rot @ mat4_scale(fly_scale_current)
         mvp = proj_mat @ view_mat @ model_mat
 
         GL.glUseProgram(fly_prog)
