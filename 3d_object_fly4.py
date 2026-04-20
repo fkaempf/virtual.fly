@@ -289,6 +289,7 @@ void main() {
     }
 
     vec3 N = normalize(v_normal);
+    if (!gl_FrontFacing) N = -N;  // fix normal for winding-reversed triangles at hemisphere boundary
 
     vec3 base = (v_color.rgb * u_baseColor.rgb);
     if (u_hasTexture == 1) {
@@ -1053,11 +1054,6 @@ def main():
 
     fly_verts, fly_indices, fly_draws = load_gltf_triangles(FLY_MODEL_PATH)
 
-    # If FOV > 180°, invert model on its Y axis (positions + normals)
-    if FLY_CAM_FOV_X_DEG is not None and FLY_CAM_FOV_X_DEG > 180.0:
-        # pos.y is column 1, normal.y is column 4 in [pos.xyz, normal.xyz, color.rgba, uv.xy]
-        fly_verts[:, 1] *= -1.0  # invert position Y
-        fly_verts[:, 4] *= -1.0  # invert normal Y
 
     # create textures per draw (if needed)
     draw_textures = []
@@ -1449,11 +1445,10 @@ def main():
         up = [0.0, 1.0, 0.0]
 
         view_mat = look_at(eye, target, up)
-        # Mirror the heading for the model so screen rotation matches minimap controls.
-        yaw = -heading + math.radians(yaw_offset_deg)
+        # Rotate model nose from -Z to movement direction without axis flips.
+        # Adding pi turns the nose 180° (from -Z to +Z), then heading aligns it.
+        yaw = heading + math.pi + math.radians(yaw_offset_deg)
         base_rot = mat4_rotate_y(yaw)
-        if flip_model_for_ultrawide:
-            base_rot = mat4_rotate_x(math.pi) @ base_rot  # flip upside-down when ultrawide
         model_mat = mat4_translate(x, 0.0, y) @ base_rot @ mat4_scale(fly_scale_current)
         mvp = proj_mat @ view_mat @ model_mat
 
