@@ -1706,7 +1706,7 @@ def main():
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
                 # Push inward by nudge amount
-                push_scale = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_center
+                push_scale = (ARENA_RADIUS_MM - 1.0) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
 
@@ -1744,7 +1744,7 @@ def main():
 
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
-                push_scale = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_center
+                push_scale = (ARENA_RADIUS_MM - 1.0) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
@@ -1797,13 +1797,12 @@ def main():
         if keys[pygame.K_COMMA]:
             cam_height -= CAMERA_Z_SPEED_MM_S * dt
 
-        # Arena boundary for camera (skip when FicTrac controls it)
-        if not (use_fictrac and not fictrac_paused):
-            r_cam_center = math.hypot(camera_x, camera_y)
-            if r_cam_center > ARENA_RADIUS_MM:
-                push_scale_cam = (ARENA_RADIUS_MM - COLLISION_NUDGE_MM) / r_cam_center
-                camera_x *= push_scale_cam
-                camera_y *= push_scale_cam
+        r_cam_center = math.hypot(camera_x, camera_y)
+        if r_cam_center > ARENA_RADIUS_MM:
+            # Slide along wall: project movement onto tangent, then clamp radius
+            wall_r = ARENA_RADIUS_MM - 1.0
+            camera_x *= wall_r / r_cam_center
+            camera_y *= wall_r / r_cam_center
         col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                        fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
         if col:
