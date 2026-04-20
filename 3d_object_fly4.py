@@ -235,7 +235,7 @@ void main() {
         vec2 dir_xy_norm = (len_xy > 1e-6) ? dir.xy / len_xy : vec2(0.0, 0.0);
         vec2 proj = r * vec2(dir_xy_norm.x, -dir_xy_norm.y);
 
-        float depth = clamp(abs(view_pos.z) / u_far, 0.0, 1.0);
+        float depth = clamp(length(view_pos.xyz) / u_far, 0.0, 1.0);
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
         vec3 dir = normalize(-view_pos.xyz);
@@ -249,7 +249,7 @@ void main() {
         ndc.y = -el / half_fov_y;
         ndc = clamp(ndc, -4.0, 4.0);
 
-        float depth = clamp(abs(view_pos.z) / u_far, 0.0, 1.0);
+        float depth = clamp(length(view_pos.xyz) / u_far, 0.0, 1.0);
         gl_Position = vec4(ndc.x, ndc.y, depth, 1.0);
     } else {
         gl_Position = u_mvp * vec4(in_pos, 1.0);
