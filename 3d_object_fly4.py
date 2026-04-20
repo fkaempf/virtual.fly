@@ -291,25 +291,28 @@ class FicTracReader:
         if len(toks) < offset + 22:
             return False
         try:
-            self.prev_heading = self.heading
-            self.prev_pos_x = self.pos_x
-            self.prev_pos_y = self.pos_y
-            self.pos_x = float(toks[offset + 14]) * self.ball_radius  # col 15
-            self.pos_y = float(toks[offset + 15]) * self.ball_radius  # col 16
-            self.heading = float(toks[offset + 16])                   # col 17
-            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19
+            # Per-frame delta rotation in lab coords (radians)
+            self.dr_x = float(toks[offset + 5]) * self.ball_radius   # col 6: dr_lab x (side)
+            self.dr_y = float(toks[offset + 6]) * self.ball_radius   # col 7: dr_lab y (yaw)
+            self.dr_z = float(toks[offset + 7]) * self.ball_radius   # col 8: dr_lab z (forward)
+            self.heading = float(toks[offset + 16])                   # col 17: integrated heading
+            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19: speed
+            self.d_heading = float(toks[offset + 6])                  # col 7: yaw delta (radians, not scaled by radius)
         except (ValueError, IndexError):
             return False
         return True
 
     def delta_heading(self):
-        return self.heading - self.prev_heading
+        """Per-frame heading change (radians)."""
+        return self.d_heading
 
-    def delta_x(self):
-        return self.pos_x - self.prev_pos_x
+    def delta_forward(self):
+        """Per-frame forward movement (mm, in fly's heading direction)."""
+        return self.dr_z
 
-    def delta_y(self):
-        return self.pos_y - self.prev_pos_y
+    def delta_side(self):
+        """Per-frame sideways movement (mm, positive = right)."""
+        return self.dr_x
 
     def close(self):
         if self.sock:
@@ -1439,7 +1442,7 @@ def main():
 
     # Arena geometry (floor + walls)
     # Wall at movement boundary + fly half-length + 2mm margin to avoid clipping
-    arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 1.0
+    arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 3.0
     arena_verts, arena_indices = build_arena_geometry(arena_wall_radius, ARENA_WALL_HEIGHT_MM)
     arena_vao = GL.glGenVertexArrays(1)
     arena_vbo = GL.glGenBuffers(1)
@@ -1759,26 +1762,27 @@ def main():
         # camera controls — FicTrac (F key to temporarily pause) or keyboard fallback
         if use_fictrac and not fictrac_paused and fictrac.poll():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
-            dx_raw = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
-            dy_raw = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
-            # Accumulate for averaged debug print
+            d_fwd = fictrac.delta_forward() * FICTRAC_TRANSLATION_GAIN
+            d_side = fictrac.delta_side() * FICTRAC_TRANSLATION_GAIN
+            # Apply heading change
+            cam_heading += dh
+            # Move camera in its heading direction (forward/side relative to camera)
+            cos_h = math.cos(cam_heading)
+            sin_h = math.sin(cam_heading)
+            camera_x += d_fwd * sin_h + d_side * cos_h
+            camera_y += d_fwd * cos_h - d_side * sin_h
+            # Debug print
             if not hasattr(main, '_ft_acc'):
-                main._ft_acc = [0.0, 0.0, 0.0, 0, 0.0]  # sum_dh, sum_dx, sum_dy, count, next_t
+                main._ft_acc = [0.0, 0.0, 0.0, 0, 0.0]
             main._ft_acc[0] += dh
-            main._ft_acc[1] += dx_raw
-            main._ft_acc[2] += dy_raw
+            main._ft_acc[1] += d_fwd
+            main._ft_acc[2] += d_side
             main._ft_acc[3] += 1
             if now >= main._ft_acc[4]:
                 n = max(main._ft_acc[3], 1)
                 r = math.hypot(camera_x, camera_y)
-                print(f"FT avg/0.5s: dh={main._ft_acc[0]:.4f} dx={main._ft_acc[1]:.4f} dy={main._ft_acc[2]:.4f} (n={n}) cam=({camera_x:.1f},{camera_y:.1f}) r={r:.1f}/{ARENA_RADIUS_MM} h={cam_heading:.3f}")
+                print(f"FT avg/0.5s: dh={main._ft_acc[0]:.4f} fwd={main._ft_acc[1]:.4f} side={main._ft_acc[2]:.4f} (n={n}) cam=({camera_x:.1f},{camera_y:.1f}) r={r:.1f}/{ARENA_RADIUS_MM}")
                 main._ft_acc = [0.0, 0.0, 0.0, 0, now + 0.5]
-            # Rotate FicTrac deltas into camera-relative direction
-            cos_h = math.cos(cam_heading)
-            sin_h = math.sin(cam_heading)
-            camera_x += dx_raw * cos_h + dy_raw * sin_h
-            camera_y += -dx_raw * sin_h + dy_raw * cos_h
-            cam_heading += dh
         else:
             cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
             cam_current_turn_rate = cam_turn_rate_rad * (CAMERA_STAND_TURN_MULT if not cam_moving else 1.0)
