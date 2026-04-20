@@ -1451,53 +1451,68 @@ def main():
 
     update_caption()
 
+    # Key state tracking via cv2 (minimap window must have focus for input)
+    _held_keys = {}  # key_code -> last_seen_time
+    _KEY_HOLD_TIMEOUT = 0.12  # seconds before a key is considered released
+
     while running:
         dt = clock.tick(TARGET_FPS) / 1000.0
         fps_now = clock.get_fps()
         now = time.time()
 
+        # Pygame: only handle window close
         for event in pygame.event.get():
             if event.type == QUIT:
                 running = False
-            if event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    running = False
-                elif event.key == pygame.K_a:
-                    USE_AUTOMATIC_FLY = not USE_AUTOMATIC_FLY
-                    print(f"USE_AUTOMATIC_FLY={USE_AUTOMATIC_FLY}")
-                elif event.key == pygame.K_p and USE_AUTOMATIC_FLY:
-                    artificial_paused = not artificial_paused
-                elif event.key == pygame.K_F1:
-                    show_help = not show_help
-                elif event.key == pygame.K_u:
-                    use_warp = not use_warp  # toggle warp
-                elif event.key == pygame.K_9:
-                    yaw_offset_deg -= YAW_ADJ_STEP_DEG
-                    update_caption()
-                    print(f"FLY_MODEL_YAW_OFFSET_DEG={yaw_offset_deg:.1f}")
-                elif event.key == pygame.K_0:
-                    yaw_offset_deg += YAW_ADJ_STEP_DEG
-                    update_caption()
-                    print(f"FLY_MODEL_YAW_OFFSET_DEG={yaw_offset_deg:.1f}")
-                elif event.key == pygame.K_MINUS:
-                    min_cam_fly_dist = max(0.0, min_cam_fly_dist - MIN_DIST_ADJ_STEP_MM)
-                    update_caption()
-                    print(f"MIN_CAM_FLY_DIST_MM={min_cam_fly_dist:.2f}")
-                elif event.key == pygame.K_EQUALS:
-                    min_cam_fly_dist += MIN_DIST_ADJ_STEP_MM
-                    update_caption()
-                    print(f"MIN_CAM_FLY_DIST_MM={min_cam_fly_dist:.2f}")
-                elif event.key == pygame.K_PERIOD:
-                    cam_height += HEIGHT_ADJ_STEP_MM
-                    update_caption()
-                    print(f"cam_height_mm={cam_height:.2f}")
-                elif event.key == pygame.K_COMMA:
-                    cam_height -= HEIGHT_ADJ_STEP_MM
-                    update_caption()
-                    print(f"cam_height_mm={cam_height:.2f}")
 
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_q]:
+        # cv2 keyboard input (requires minimap/help window focus)
+        cv_key = cv2.waitKey(1) & 0xFFFF
+        if cv_key != 0xFFFF and cv_key != 0:
+            _held_keys[cv_key] = now
+            # Single-press actions (on key-down only)
+            if cv_key == 27:  # Esc
+                running = False
+            elif cv_key == ord('a'):
+                USE_AUTOMATIC_FLY = not USE_AUTOMATIC_FLY
+                print(f"USE_AUTOMATIC_FLY={USE_AUTOMATIC_FLY}")
+            elif cv_key == ord('p') and USE_AUTOMATIC_FLY:
+                artificial_paused = not artificial_paused
+            elif cv_key == ord('u'):
+                use_warp = not use_warp
+            elif cv_key == ord('9'):
+                yaw_offset_deg -= YAW_ADJ_STEP_DEG
+                update_caption()
+                print(f"FLY_MODEL_YAW_OFFSET_DEG={yaw_offset_deg:.1f}")
+            elif cv_key == ord('0'):
+                yaw_offset_deg += YAW_ADJ_STEP_DEG
+                update_caption()
+                print(f"FLY_MODEL_YAW_OFFSET_DEG={yaw_offset_deg:.1f}")
+            elif cv_key == ord('-'):
+                min_cam_fly_dist = max(0.0, min_cam_fly_dist - MIN_DIST_ADJ_STEP_MM)
+                update_caption()
+                print(f"MIN_CAM_FLY_DIST_MM={min_cam_fly_dist:.2f}")
+            elif cv_key == ord('='):
+                min_cam_fly_dist += MIN_DIST_ADJ_STEP_MM
+                update_caption()
+                print(f"MIN_CAM_FLY_DIST_MM={min_cam_fly_dist:.2f}")
+            elif cv_key == ord('.'):
+                cam_height += HEIGHT_ADJ_STEP_MM
+                update_caption()
+                print(f"cam_height_mm={cam_height:.2f}")
+            elif cv_key == ord(','):
+                cam_height -= HEIGHT_ADJ_STEP_MM
+                update_caption()
+                print(f"cam_height_mm={cam_height:.2f}")
+            elif cv_key == 0x00 | 0xF1 or cv_key == 7340032:  # F1
+                show_help = not show_help
+
+        # Expire held keys
+        _held_keys = {k: t for k, t in _held_keys.items() if now - t < _KEY_HOLD_TIMEOUT}
+
+        def key_held(code):
+            return code in _held_keys
+
+        if key_held(ord('q')):
             running = False
 
         prev_x, prev_y = x, y
@@ -1560,18 +1575,21 @@ def main():
                     y += COLLISION_NUDGE_MM * (y - camera_y) / sep
 
         else:
-            moving = keys[pygame.K_w] or keys[pygame.K_s]
+            # cv2 arrow key codes on Windows
+            _UP, _DOWN, _LEFT, _RIGHT = 2490368, 2621440, 2424832, 2555904
+
+            moving = key_held(ord('w')) or key_held(ord('s'))
             current_turn_rate = turn_rate_rad * (STAND_TURN_MULT if not moving else 1.0)
 
-            if keys[pygame.K_a]:
-                heading -= current_turn_rate * dt  # left key turns left
-            if keys[pygame.K_d]:
-                heading += current_turn_rate * dt  # right key turns right
+            if key_held(ord('d')):
+                heading -= current_turn_rate * dt
+            if key_held(ord('f')):
+                heading += current_turn_rate * dt
 
-            if keys[pygame.K_w]:
+            if key_held(ord('w')):
                 x += speed_f * math.sin(heading) * dt
                 y += speed_f * math.cos(heading) * dt
-            if keys[pygame.K_s]:
+            if key_held(ord('s')):
                 x -= speed_b * math.sin(heading) * dt
                 y -= speed_b * math.cos(heading) * dt
 
@@ -1595,6 +1613,7 @@ def main():
                     y += COLLISION_NUDGE_MM * (y - camera_y) / sep
 
         # camera controls — FicTrac or keyboard fallback
+        _UP, _DOWN, _LEFT, _RIGHT = 2490368, 2621440, 2424832, 2555904
         if use_fictrac and fictrac.poll():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
             dx = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
@@ -1603,21 +1622,21 @@ def main():
             camera_x += dx
             camera_y += dy
         else:
-            cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
+            cam_moving = key_held(_UP) or key_held(_DOWN)
             cam_current_turn_rate = cam_turn_rate_rad * (CAMERA_STAND_TURN_MULT if not cam_moving else 1.0)
-            if keys[pygame.K_LEFT]:
+            if key_held(_LEFT):
                 cam_heading -= cam_current_turn_rate * dt
-            if keys[pygame.K_RIGHT]:
+            if key_held(_RIGHT):
                 cam_heading += cam_current_turn_rate * dt
-            if keys[pygame.K_UP]:
+            if key_held(_UP):
                 camera_x += CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
                 camera_y += CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
-            if keys[pygame.K_DOWN]:
+            if key_held(_DOWN):
                 camera_x -= CAMERA_SPEED_MM_S * math.sin(cam_heading) * dt
                 camera_y -= CAMERA_SPEED_MM_S * math.cos(cam_heading) * dt
-        if keys[pygame.K_PERIOD]:
+        if key_held(ord('.')):
             cam_height += CAMERA_Z_SPEED_MM_S * dt
-        if keys[pygame.K_COMMA]:
+        if key_held(ord(',')):
             cam_height -= CAMERA_Z_SPEED_MM_S * dt
 
         r_cam_center = math.hypot(camera_x, camera_y)
@@ -1757,7 +1776,6 @@ def main():
                 cam_heading,
             )
             cv2.imshow("minimap", map_img)
-            cv2.waitKey(1)
 
         # Help overlay (separate cv2 window, toggle with F1)
         if show_help:
@@ -1780,7 +1798,6 @@ def main():
                 cv2.putText(help_img, line, (10, 18 + i * 18),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.imshow("help", help_img)
-            cv2.waitKey(1)
         else:
             try:
                 cv2.destroyWindow("help")
