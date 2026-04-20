@@ -31,7 +31,7 @@ Configuration / input knobs (all module-level):
 - AUTO_EDGE_THRESH: radius threshold (fraction of arena) to begin edge avoidance behavior.
 """
 
-import os, sys, math, time, ctypes, base64, socket, select
+import os, sys, math, time, ctypes, base64, socket, select, argparse, json
 from collections import deque
 from pathlib import Path
 
@@ -153,6 +153,71 @@ AUTO_MEAN_PAUSE_DUR = 0.7
 AUTO_TURN_STD_DEG   = 80.0
 AUTO_EDGE_TURN_DEG  = 120.0
 AUTO_EDGE_THRESH    = 0.8 * ARENA_RADIUS_MM
+
+# ----------------- CLI / JSON CONFIG OVERRIDE -----------------
+# All module-level UPPER_CASE constants can be overridden via:
+#   --config path/to/config.json     (JSON file with key-value pairs)
+#   --KEY VALUE                      (command-line, e.g. --FLY_PHYS_LENGTH_MM 5)
+# JSON example: {"FLY_PHYS_LENGTH_MM": 5, "USE_AUTOMATIC_FLY": true, "BG_COLOR": [0,0,0]}
+
+def _apply_config_overrides():
+    """Parse CLI args and optional JSON config to override module-level constants."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", type=str, default=None, help="JSON config file path")
+    known, remaining = parser.parse_known_args()
+
+    overrides = {}
+
+    # Load JSON config if provided
+    if known.config:
+        p = Path(known.config)
+        if p.exists():
+            with open(p) as f:
+                overrides.update(json.load(f))
+            print(f"Config: loaded {len(overrides)} overrides from {p}")
+        else:
+            print(f"Config: WARNING — {p} not found, ignoring")
+
+    # Parse --KEY VALUE pairs from remaining CLI args
+    i = 0
+    while i < len(remaining):
+        arg = remaining[i]
+        if arg.startswith("--") and i + 1 < len(remaining):
+            key = arg[2:]
+            val_str = remaining[i + 1]
+            # Try to parse as JSON value (handles int, float, bool, list, string)
+            try:
+                val = json.loads(val_str)
+            except json.JSONDecodeError:
+                val = val_str  # keep as string
+            overrides[key] = val
+            i += 2
+        else:
+            i += 1
+
+    # Apply overrides to module globals
+    g = globals()
+    for key, val in overrides.items():
+        if key in g:
+            old = g[key]
+            # Convert types: Path objects
+            if isinstance(old, Path):
+                val = Path(val)
+            # Convert types: tuples (e.g. BG_COLOR, START_POS)
+            elif isinstance(old, tuple) and isinstance(val, list):
+                val = tuple(val)
+            g[key] = val
+            print(f"Config: {key} = {val!r}")
+        else:
+            print(f"Config: WARNING — unknown key '{key}', ignoring")
+
+_apply_config_overrides()
+
+# Recompute derived constants that depend on overridden values
+CAMERA_FOV_X_DEG = FLY_CAM_FOV_X_DEG
+AUTO_EDGE_THRESH = 0.8 * ARENA_RADIUS_MM
+FLY_BODY_RADIUS_MM = 0.5 * FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE
+CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM
 
 # ----------------- FICTRAC -----------------
 
