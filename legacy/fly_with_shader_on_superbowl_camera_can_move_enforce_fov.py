@@ -18,19 +18,10 @@ except Exception:
 # Turn this on to let the fly move by an internal behavioral algorithm (no WASD)
 AUTOMATIC_FLY = True
 
-if is_mac:
-    MAPX_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapx.experimental.npy")
-    MAPY_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapy.experimental.npy")
-else:
-    MAPX_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapx.experimental.npy")
-    MAPY_PATH = Path(rf"C:\Users\VR-Behaviour\flocroscope\configs\camera.projector.mapping\mapy.experimental.npy")
-
-# 3D fly model path (GLB from Blender)
-if is_mac:
-    FLY_MODEL_PATH = Path("/Users/fkampf/Documents/virtual.fly/testmodel.glb")
-else:
-    FLY_MODEL_PATH = Path(rf"C:\Users\VR-Behaviour\virtual.fly\testmodel.glb")
-
+# Path to precomputed projector→camera mapping (x-coordinates, float32 .npy)
+MAPX_PATH = Path(r"D:/screen.calibration/configs/camera.projector.mapping/mapx.experimental.npy")
+# Path to precomputed projector→camera mapping (y-coordinates, float32 .npy)
+MAPY_PATH = Path(r"D:/screen.calibration/configs/camera.projector.mapping/mapy.experimental.npy")
 
 # Folder containing the rendered fly sprite images used for the stimulus
 IMG_FOLDER   = r"D:\virtual.fly\og_pics"
