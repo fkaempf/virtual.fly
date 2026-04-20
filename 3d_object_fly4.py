@@ -102,7 +102,7 @@ LIGHT_MAX_GAIN = 4.0             # clamp on total light gain
 ARENA_RADIUS_MM = 40
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
-CAM_HEIGHT_MM   = 2.84
+CAM_HEIGHT_MM   = 5.68
 
 SPEED_MM_S       = 20
 BACK_MM_S        = SPEED_MM_S * 0.64
