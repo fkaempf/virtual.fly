@@ -116,7 +116,7 @@ HEIGHT_ADJ_STEP_MM     = 0.5  # step size for live height tuning when tapping th
 
 # FicTrac closed-loop camera control
 FICTRAC_HOST         = "127.0.0.1"
-FICTRAC_PORT         = 2000
+FICTRAC_PORT         = 2001
 FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock_port are read from it
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
