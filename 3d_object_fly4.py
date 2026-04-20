@@ -81,8 +81,9 @@ DEBUG_ENABLED            = False  # set False to silence debug prints
 FLY_BODY_RADIUS_MM = 0.5 * FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE
 CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM  # treat camera as a second fly for overlap avoidance
 MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
-MIN_CAM_FLY_DIST_MM = 1.5
+MIN_CAM_FLY_DIST_MM = 1.0
 MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
+COLLISION_NUDGE_MM   = 0.1  # how far to push apart on collision (mm)
 
 BG_COLOR = (255, 255, 255)  # BGR
 TARGET_FPS = 60
@@ -892,6 +893,59 @@ def enforce_min_distance(pos, other, min_dist):
             py = oy + dy * scale
     return px, py
 
+def check_obb_collision(px, py, obb_cx, obb_cy, obb_yaw, half_w, half_l, margin=0.0):
+    """Check if point (px,py) is inside the OBB defined by center, yaw, half-extents + margin.
+    Returns (colliding, push_x, push_y) where push vector moves point outside."""
+    # Transform point into OBB's local frame
+    dx = px - obb_cx
+    dy = py - obb_cy
+    cos_y = math.cos(-obb_yaw)
+    sin_y = math.sin(-obb_yaw)
+    local_x = dx * cos_y - dy * sin_y
+    local_y = dx * sin_y + dy * cos_y
+
+    # Check overlap with expanded box (half-extents + margin)
+    hw = half_w + margin
+    hl = half_l + margin
+
+    if abs(local_x) >= hw or abs(local_y) >= hl:
+        return False, 0.0, 0.0  # no collision
+
+    # Find shortest push-out direction
+    push_right = hw - local_x
+    push_left = hw + local_x
+    push_fwd = hl - local_y
+    push_back = hl + local_y
+
+    min_push = min(push_right, push_left, push_fwd, push_back)
+
+    # Local push direction
+    if min_push == push_right:
+        lx, ly = min_push, 0.0
+    elif min_push == push_left:
+        lx, ly = -min_push, 0.0
+    elif min_push == push_fwd:
+        lx, ly = 0.0, min_push
+    else:
+        lx, ly = 0.0, -min_push
+
+    # Rotate push vector back to world frame
+    cos_y2 = math.cos(obb_yaw)
+    sin_y2 = math.sin(obb_yaw)
+    world_px = lx * cos_y2 - ly * sin_y2
+    world_py = lx * sin_y2 + ly * cos_y2
+
+    return True, world_px, world_py
+
+
+def fly_cam_obb_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
+                       half_w_raw, half_l_raw, scale, cam_radius):
+    obb_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
+    hw = half_w_raw * scale
+    hl = half_l_raw * scale
+    return check_obb_collision(cam_x, cam_y, fly_x, fly_y, obb_yaw, hw, hl, cam_radius)
+
+
 def compute_camera_fly_distance_mm(fly_pos, cam_pos, cam_height_mm):
     """Return 3D distance between camera and fly, including camera height."""
     fx, fy = fly_pos
@@ -1077,6 +1131,8 @@ def main():
         "bio_len_mm:", FLY_PHYS_LENGTH_MM * FLY_BASE_SCALE,
     )
     mesh_longest_raw = float(longest)
+    fly_half_w_raw = float(extents[0]) * 0.5  # half-width (X axis in model space)
+    fly_half_l_raw = float(extents[2]) * 0.5  # half-length (Z axis, nose-to-tail)
 
     fly_vao = GL.glGenVertexArrays(1)
     fly_vbo = GL.glGenBuffers(1)
@@ -1322,6 +1378,17 @@ def main():
                 x *= scale_back
                 y *= scale_back
 
+            # OBB collision with camera — revert + slight push out
+            col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+            if col:
+                x, y = prev_x, prev_y
+                # tiny nudge to unstick
+                sep = math.hypot(x - camera_x, y - camera_y)
+                if sep > 1e-6:
+                    x += COLLISION_NUDGE_MM * (x - camera_x) / sep
+                    y += COLLISION_NUDGE_MM * (y - camera_y) / sep
+
         else:
             moving = keys[pygame.K_w] or keys[pygame.K_s]
             current_turn_rate = turn_rate_rad * (STAND_TURN_MULT if not moving else 1.0)
@@ -1348,14 +1415,14 @@ def main():
                 scale_back = ARENA_RADIUS_MM / r_center
                 x *= scale_back
                 y *= scale_back
-            x, y = enforce_min_distance((x, y), (camera_x, camera_y), min_cam_fly_dist)
-            r_center = math.hypot(x, y)
-            if r_center > ARENA_RADIUS_MM:
-                scale_back = ARENA_RADIUS_MM / r_center
-                x *= scale_back
-                y *= scale_back
-            if math.hypot(x - camera_x, y - camera_y) < min_cam_fly_dist:
+            col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+            if col:
                 x, y = prev_x, prev_y
+                sep = math.hypot(x - camera_x, y - camera_y)
+                if sep > 1e-6:
+                    x += COLLISION_NUDGE_MM * (x - camera_x) / sep
+                    y += COLLISION_NUDGE_MM * (y - camera_y) / sep
 
         # camera controls
         cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
@@ -1382,21 +1449,14 @@ def main():
             scale_back_cam = ARENA_RADIUS_MM / r_cam_center
             camera_x *= scale_back_cam
             camera_y *= scale_back_cam
-        if math.hypot(camera_x - x, camera_y - y) < min_cam_fly_dist:
+        col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                       fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+        if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
-        # If camera moves into fly, push the fly away (do not move camera)
-        x, y = enforce_min_distance((x, y), (camera_x, camera_y), min_cam_fly_dist)
-        r_center = math.hypot(x, y)
-        if r_center > ARENA_RADIUS_MM:
-            scale_back = ARENA_RADIUS_MM / r_center
-            x *= scale_back
-            y *= scale_back
-        camera_x, camera_y = enforce_min_distance((camera_x, camera_y), (x, y), min_cam_fly_dist)
-        r_cam_center = math.hypot(camera_x, camera_y)
-        if r_cam_center > ARENA_RADIUS_MM:
-            scale_back_cam = ARENA_RADIUS_MM / r_cam_center
-            camera_x *= scale_back_cam
-            camera_y *= scale_back_cam
+            sep = math.hypot(camera_x - x, camera_y - y)
+            if sep > 1e-6:
+                camera_x += COLLISION_NUDGE_MM * (camera_x - x) / sep
+                camera_y += COLLISION_NUDGE_MM * (camera_y - y) / sep
 
         # Smooth scale based on live camera-fly distance so apparent size matches separation.
         apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
