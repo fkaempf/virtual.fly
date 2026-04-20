@@ -142,9 +142,12 @@ MIN_VIEW_DIST_MM = 2.5  # not explicitly used now
 SHOW_MINIMAP = True
 MAP_W, MAP_H = 420, 420
 MAP_PAD      = 24
-TRAIL_SECS   = 5.0
-TRAIL_COLOR  = (255, 200, 0)
-TRAIL_THICK  = 2
+TRAIL_SECS       = 5.0
+TRAIL_COLOR      = (255, 200, 0)
+TRAIL_THICK      = 2
+CAM_TRAIL_SECS   = 3.0
+CAM_TRAIL_COLOR  = (0, 180, 255)  # orange-ish BGR
+CAM_TRAIL_THICK  = 2
 MINIMAP_HZ   = 60
 
 USE_AUTOMATIC_FLY = False
@@ -525,9 +528,11 @@ def draw_minimap_dynamic(
     cam_x,
     cam_y,
     cam_heading,
+    cam_trail_pts_uv=None,
 ):
     img = base_img.copy()
 
+    # Fly trail (fading)
     if len(trail_pts_uv) >= 2:
         now_color = np.array(TRAIL_COLOR, dtype=np.float32)
         nseg = len(trail_pts_uv) - 1
@@ -537,6 +542,17 @@ def draw_minimap_dynamic(
             alpha = (i + 1) / nseg
             col = tuple((now_color * (0.3 + 0.7 * alpha)).astype(np.int32).tolist())
             cv2.line(img, p0, p1, col, TRAIL_THICK, cv2.LINE_AA)
+
+    # Camera trail (fading)
+    if cam_trail_pts_uv and len(cam_trail_pts_uv) >= 2:
+        cam_color = np.array(CAM_TRAIL_COLOR, dtype=np.float32)
+        nseg = len(cam_trail_pts_uv) - 1
+        for i in range(nseg):
+            p0 = cam_trail_pts_uv[i]
+            p1 = cam_trail_pts_uv[i + 1]
+            alpha = (i + 1) / nseg
+            col = tuple((cam_color * (0.3 + 0.7 * alpha)).astype(np.int32).tolist())
+            cv2.line(img, p0, p1, col, CAM_TRAIL_THICK, cv2.LINE_AA)
 
     cam_u, cam_v = world_to_minimap(cam_x, cam_y, center_u, center_v, scale_px_per_mm)
 
@@ -1414,6 +1430,7 @@ def main():
     cam_turn_rate_rad = math.radians(CAMERA_TURN_DEG_S)
 
     trail = deque()
+    cam_trail = deque()
 
     # minimap geometry
     R = ARENA_RADIUS_MM
@@ -1700,6 +1717,10 @@ def main():
             expire_before = now - TRAIL_SECS
             while trail and trail[0][0] < expire_before:
                 trail.popleft()
+            cam_trail.append((now, camera_x, camera_y))
+            cam_expire = now - CAM_TRAIL_SECS
+            while cam_trail and cam_trail[0][0] < cam_expire:
+                cam_trail.popleft()
 
         update_caption()
 
@@ -1775,6 +1796,10 @@ def main():
                 world_to_minimap(xi, yi, center_u, center_v, scale_px_per_mm)
                 for _, xi, yi in trail
             ]
+            cam_trail_uv = [
+                world_to_minimap(cx, cy, center_u, center_v, scale_px_per_mm)
+                for _, cx, cy in cam_trail
+            ]
             map_img = draw_minimap_dynamic(
                 minimap_base,
                 x,
@@ -1790,6 +1815,7 @@ def main():
                 camera_x,
                 camera_y,
                 cam_heading,
+                cam_trail_pts_uv=cam_trail_uv,
             )
             cv2.imshow("minimap", map_img)
 
