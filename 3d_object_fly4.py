@@ -1853,11 +1853,12 @@ def main():
 
         # Help overlay (separate cv2 window, toggle with H)
         if show_help:
-            help_img = np.full((220, 380, 3), 30, dtype=np.uint8)
+            ft_status = f"ON ({ft_host}:{ft_port})" if fictrac.connected else "OFF (keyboard)"
+            help_img = np.full((280, 400, 3), 30, dtype=np.uint8)
             help_lines = [
-                "--- HOTKEYS (pygame or minimap) ---",
-                "WASD: move fly (pygame)",
-                "Arrows: move camera (pygame)",
+                "--- HOTKEYS ---",
+                "WSDF: move/turn fly",
+                "Arrows: move/turn camera",
                 "A: toggle auto-fly",
                 "P: pause auto-fly",
                 "U: toggle warp",
@@ -1866,18 +1867,16 @@ def main():
                 "-/=: min distance",
                 ",/.: camera height",
                 "Q/Esc: quit",
-                f"FicTrac: {'ON' if use_fictrac else 'OFF'}",
+                "",
+                f"FicTrac: {ft_status}",
                 f"AutoFly: {'ON' if USE_AUTOMATIC_FLY else 'OFF'}",
             ]
             for i, line in enumerate(help_lines):
                 cv2.putText(help_img, line, (10, 18 + i * 18),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.imshow("help", help_img)
-        else:
-            try:
-                cv2.destroyWindow("help")
-            except cv2.error:
-                pass
+        elif cv2.getWindowProperty("help", cv2.WND_PROP_VISIBLE) >= 1:
+            cv2.destroyWindow("help")
 
     fictrac.close()
     tex_list = [warp_tex, cam_tex]
