@@ -1769,8 +1769,8 @@ def main():
             # Move camera in its heading direction (forward/side relative to camera)
             cos_h = math.cos(cam_heading)
             sin_h = math.sin(cam_heading)
-            camera_x += d_fwd * sin_h + d_side * cos_h
-            camera_y += d_fwd * cos_h - d_side * sin_h
+            camera_x += -d_fwd * sin_h + d_side * cos_h
+            camera_y += -d_fwd * cos_h - d_side * sin_h
             # Debug print
             if not hasattr(main, '_ft_acc'):
                 main._ft_acc = [0.0, 0.0, 0.0, 0, 0.0]
