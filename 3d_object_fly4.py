@@ -1345,9 +1345,6 @@ def main():
 
     minimap_base = None
     if SHOW_MINIMAP:
-        cv2.namedWindow("minimap", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("minimap", MAP_W, MAP_H)
-        cv2.moveWindow("minimap", 50, 50)
         minimap_base = build_minimap_base(
             ARENA_RADIUS_MM,
             CAMERA_X_MM,
@@ -1709,9 +1706,7 @@ def main():
             GL.glDisable(GL.GL_BLEND)
             GL.glDeleteTextures([help_tex])
 
-        pygame.display.flip()
-
-        # minimap
+        # minimap overlay on main screen (bottom-right corner)
         if SHOW_MINIMAP and now >= next_minimap_t:
             next_minimap_t = now + 1.0 / MINIMAP_HZ
             trail_uv = [
@@ -1734,8 +1729,30 @@ def main():
                 camera_y,
                 cam_heading,
             )
-            cv2.imshow("minimap", map_img)
-            cv2.waitKey(1)
+            # Convert BGR→RGB, flip vertically for GL, upload as texture
+            map_rgb = cv2.cvtColor(map_img, cv2.COLOR_BGR2RGB)
+            map_rgb = np.flipud(map_rgb).copy()
+            mh, mw = map_rgb.shape[:2]
+            if not hasattr(main, '_map_tex'):
+                main._map_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, main._map_tex)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGB, mw, mh, 0,
+                            GL.GL_RGB, GL.GL_UNSIGNED_BYTE, map_rgb)
+            # Draw in bottom-right corner
+            pad = MAP_PAD
+            GL.glViewport(proj_w - mw - pad, pad, mw, mh)
+            GL.glUseProgram(prog)
+            GL.glUniform1i(u_useWarp_loc, 0)  # passthrough
+            GL.glBindVertexArray(vao)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, main._map_tex)
+            GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+            GL.glBindVertexArray(0)
+            GL.glViewport(0, 0, proj_w, proj_h)  # restore
+
+        pygame.display.flip()
 
     fictrac.close()
     tex_list = [warp_tex, cam_tex]
@@ -1750,7 +1767,6 @@ def main():
     GL.glDeleteProgram(prog)
     GL.glDeleteProgram(fly_prog)
     pygame.quit()
-    cv2.destroyAllWindows()
     sys.exit()
 
 if __name__ == "__main__":
