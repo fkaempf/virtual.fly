@@ -88,6 +88,11 @@ COLLISION_NUDGE_MM   = 0.1  # how far to push apart on collision (mm)
 BG_COLOR = (255, 255, 255)  # BGR
 TARGET_FPS = 60
 
+# Arena 3D geometry
+ARENA_FLOOR_COLOR    = (0.75, 0.75, 0.75)  # RGB float, light grey
+ARENA_WALL_COLOR     = (0.55, 0.55, 0.55)  # RGB float, darker grey
+ARENA_WALL_HEIGHT_MM = 5.0
+
 # Lighting (four directional lights from above: N, E, S, W)
 LIGHT_AMBIENT = 0.6              # base ambient multiplier
 LIGHT_INTENSITIES = [2.0, 2.0, 2.0, 2.0]  # strengths for N, E, S, W
@@ -97,7 +102,7 @@ LIGHT_MAX_GAIN = 4.0             # clamp on total light gain
 ARENA_RADIUS_MM = 40
 CAMERA_X_MM     = 0.0
 CAMERA_Y_MM     = -ARENA_RADIUS_MM
-CAM_HEIGHT_MM   = 0.89
+CAM_HEIGHT_MM   = 0.93
 
 SPEED_MM_S       = 20
 BACK_MM_S        = SPEED_MM_S * 0.64
@@ -1053,6 +1058,46 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
+def build_arena_geometry(radius, wall_height, n_segments=64):
+    """Generate floor disc + wall cylinder as [N,12] verts and uint32 indices."""
+    # Floor disc (triangle fan from center)
+    floor_verts = []
+    floor_idx = []
+    # Center vertex
+    floor_verts.append([0, 0, 0,  0, 1, 0,  *ARENA_FLOOR_COLOR, 1,  0, 0])
+    for i in range(n_segments + 1):
+        a = 2 * math.pi * i / n_segments
+        x = radius * math.cos(a)
+        z = radius * math.sin(a)
+        floor_verts.append([x, 0, z,  0, 1, 0,  *ARENA_FLOOR_COLOR, 1,  0, 0])
+    for i in range(1, n_segments + 1):
+        floor_idx.extend([0, i, i + 1 if i < n_segments else 1])
+
+    # Wall cylinder (quads as two triangles each)
+    wall_verts = []
+    wall_idx = []
+    base = len(floor_verts)
+    for i in range(n_segments + 1):
+        a = 2 * math.pi * i / n_segments
+        x = radius * math.cos(a)
+        z = radius * math.sin(a)
+        nx = math.cos(a)
+        nz = math.sin(a)
+        # Bottom vertex
+        wall_verts.append([x, 0, z,  -nx, 0, -nz,  *ARENA_WALL_COLOR, 1,  0, 0])
+        # Top vertex
+        wall_verts.append([x, wall_height, z,  -nx, 0, -nz,  *ARENA_WALL_COLOR, 1,  0, 0])
+    for i in range(n_segments):
+        b = base + i * 2
+        # Normals point inward (negative radial)
+        wall_idx.extend([b, b + 2, b + 1])
+        wall_idx.extend([b + 1, b + 2, b + 3])
+
+    verts = np.array(floor_verts + wall_verts, dtype=np.float32)
+    idx = np.array(floor_idx + wall_idx, dtype=np.uint32)
+    return verts, idx
+
+
 def enforce_min_distance(pos, other, min_dist):
     px, py = pos
     ox, oy = other
@@ -1352,6 +1397,27 @@ def main():
 
     GL.glBindVertexArray(0)
 
+    # Arena geometry (floor + walls)
+    arena_verts, arena_indices = build_arena_geometry(ARENA_RADIUS_MM, ARENA_WALL_HEIGHT_MM)
+    arena_vao = GL.glGenVertexArrays(1)
+    arena_vbo = GL.glGenBuffers(1)
+    arena_ebo = GL.glGenBuffers(1)
+    GL.glBindVertexArray(arena_vao)
+    GL.glBindBuffer(GL.GL_ARRAY_BUFFER, arena_vbo)
+    GL.glBufferData(GL.GL_ARRAY_BUFFER, arena_verts.nbytes, arena_verts, GL.GL_STATIC_DRAW)
+    GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, arena_ebo)
+    GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, arena_indices.nbytes, arena_indices, GL.GL_STATIC_DRAW)
+    GL.glEnableVertexAttribArray(0)
+    GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f, ctypes.c_void_p(0))
+    GL.glEnableVertexAttribArray(1)
+    GL.glVertexAttribPointer(1, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f, ctypes.c_void_p(3 * 4))
+    GL.glEnableVertexAttribArray(2)
+    GL.glVertexAttribPointer(2, 4, GL.GL_FLOAT, GL.GL_FALSE, stride_f, ctypes.c_void_p(6 * 4))
+    GL.glEnableVertexAttribArray(3)
+    GL.glVertexAttribPointer(3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride_f, ctypes.c_void_p(10 * 4))
+    GL.glBindVertexArray(0)
+    arena_n_indices = len(arena_indices)
+
     # set static lighting uniforms
     light_dirs = compute_light_dirs(LIGHT_ELEVATION_DEG)
     light_int = np.array(LIGHT_INTENSITIES, dtype=np.float32)
@@ -1649,11 +1715,14 @@ def main():
         # camera controls — FicTrac (F key to temporarily pause) or keyboard fallback
         if use_fictrac and not fictrac_paused and fictrac.poll():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
-            dx = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
-            dy = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
+            dx_raw = fictrac.delta_x() * FICTRAC_TRANSLATION_GAIN
+            dy_raw = fictrac.delta_y() * FICTRAC_TRANSLATION_GAIN
+            # Rotate FicTrac deltas into camera-relative direction
+            cos_h = math.cos(cam_heading)
+            sin_h = math.sin(cam_heading)
+            camera_x += dx_raw * cos_h + dy_raw * sin_h
+            camera_y += -dx_raw * sin_h + dy_raw * cos_h
             cam_heading += dh
-            camera_x += dx
-            camera_y += dy
         else:
             cam_moving = keys[pygame.K_UP] or keys[pygame.K_DOWN]
             cam_current_turn_rate = cam_turn_rate_rad * (CAMERA_STAND_TURN_MULT if not cam_moving else 1.0)
@@ -1745,8 +1814,25 @@ def main():
         mvp = proj_mat @ view_mat @ model_mat
 
         GL.glUseProgram(fly_prog)
-        GL.glBindVertexArray(fly_vao)
+
+        # Render arena (floor + walls) first
+        arena_model = np.eye(4, dtype=np.float32)
+        arena_mvp = proj_mat @ view_mat @ arena_model
+        GL.glBindVertexArray(arena_vao)
         GL.glUniformMatrix4fv(u_fly_view_loc, 1, GL.GL_FALSE, view_mat.T.astype(np.float32))
+        GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, arena_mvp.T.astype(np.float32))
+        GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, arena_model.T.astype(np.float32))
+        GL.glUniform1f(u_fly_far_loc, z_far)
+        GL.glUniform1f(u_fly_fovy_loc, fov_y_rad)
+        GL.glUniform1f(u_fly_fovx_loc, fov_x_rad)
+        GL.glUniform1i(u_fly_proj_mode_loc, proj_mode)
+        GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1, 1, 1, 1], dtype=np.float32))
+        GL.glUniform1i(u_fly_has_tex_loc, 0)
+        GL.glDrawElements(GL.GL_TRIANGLES, arena_n_indices, GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+        GL.glBindVertexArray(0)
+
+        # Render fly model
+        GL.glBindVertexArray(fly_vao)
         GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, mvp.T.astype(np.float32))
         GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, model_mat.T.astype(np.float32))
         GL.glUniform1f(u_fly_far_loc, z_far)
