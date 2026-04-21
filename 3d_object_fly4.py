@@ -1374,6 +1374,68 @@ def fly_cam_hull_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
     return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale, margin)
 
 
+def compute_radial_profile(verts_xyz, n_sectors=72):
+    """Compute per-angle max vertex reach on XZ plane from mesh center.
+    Returns array of n_sectors radial distances (raw mesh units)."""
+    xz = verts_xyz[:, [0, 2]].astype(np.float64)
+    angles = np.linspace(0, 2 * np.pi, n_sectors, endpoint=False)
+    profile = np.zeros(n_sectors, dtype=np.float64)
+    for i, a in enumerate(angles):
+        # Project all vertices onto this direction
+        dx = np.cos(a)
+        dz = np.sin(a)
+        proj = xz[:, 0] * dx + xz[:, 1] * dz
+        profile[i] = max(float(proj.max()), 0.0)
+    return profile, angles
+
+
+def check_radial_collision(px, py, fly_x, fly_y, fly_yaw, profile, n_sectors, scale, margin):
+    """Check if point is inside the mesh radial profile (scaled + rotated + margin).
+    Returns (colliding, push_x, push_y)."""
+    dx = px - fly_x
+    dy = py - fly_y
+    cos_y = math.cos(-fly_yaw)
+    sin_y = math.sin(-fly_yaw)
+    local_x = dx * cos_y - dy * sin_y
+    local_y = dx * sin_y + dy * cos_y
+
+    dist = math.hypot(local_x, local_y)
+    if dist < 1e-9:
+        return True, margin + profile[0] * scale, 0.0
+
+    # Angle from fly center to camera in local frame
+    angle = math.atan2(local_y, local_x)
+    if angle < 0:
+        angle += 2 * math.pi
+
+    # Interpolate radial boundary from profile
+    sector_f = angle / (2 * math.pi) * n_sectors
+    idx0 = int(sector_f) % n_sectors
+    idx1 = (idx0 + 1) % n_sectors
+    frac = sector_f - int(sector_f)
+    boundary_raw = profile[idx0] * (1 - frac) + profile[idx1] * frac
+    boundary = boundary_raw * scale + margin
+
+    if dist >= boundary:
+        return False, 0.0, 0.0
+
+    # Inside — push out radially
+    push_mag = boundary - dist + 0.01
+    push_lx = local_x / dist * push_mag
+    push_ly = local_y / dist * push_mag
+    cos_y2 = math.cos(fly_yaw)
+    sin_y2 = math.sin(fly_yaw)
+    world_px = push_lx * cos_y2 - push_ly * sin_y2
+    world_py = push_lx * sin_y2 + push_ly * cos_y2
+    return True, world_px, world_py
+
+
+def fly_cam_radial_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
+                          profile, n_sectors, scale, margin):
+    fly_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
+    return check_radial_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, profile, n_sectors, scale, margin)
+
+
 def fly_cam_ellipse_check(fly_x, fly_y, cam_x, cam_y, fly_yaw,
                            half_w_raw, half_l_raw, scale, margin):
     """Oriented ellipse collision (tight on sides, long front-to-back).
@@ -1644,6 +1706,10 @@ def main():
     fly_hull, fly_hull_normals = compute_mesh_hull_xz(pos, margin=0.0)
     # Bounding radius from 3D mesh (max distance from center in any direction)
     fly_bound_radius_raw = float(np.sqrt((pos ** 2).sum(axis=1).max()))
+    # Radial collision profile: max vertex reach per angular direction on XZ
+    N_COLLISION_SECTORS = 72
+    fly_collision_profile, _ = compute_radial_profile(pos, N_COLLISION_SECTORS)
+    print(f"Collision profile: {N_COLLISION_SECTORS} sectors, max reach {fly_collision_profile.max():.4f}")
     print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm, Hull vertices: {len(fly_hull)}")
 
     fly_vao = GL.glGenVertexArrays(1)
@@ -1951,9 +2017,8 @@ def main():
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
 
             # OBB collision with camera — revert + slight push out
-            col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
-                                             heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
+            col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
@@ -1988,9 +2053,8 @@ def main():
             dx_move = x - prev_x
             dy_move = y - prev_y
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
-            col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
-                                             heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
+            col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -2171,30 +2235,28 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            # Draw oriented ellipse at collision boundary
-            rx = fly_half_w_raw * fly_scale_collision + min_cam_fly_dist  # side
-            ry_back = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist
-            ry_front = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist + COLLISION_FRONT_PAD
             cos_e = math.cos(obb_yaw)
             sin_e = math.sin(obb_yaw)
-            n_circle = 48
             line_verts = []
             top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_collision
+            # Draw radial profile shape
+            n_viz = N_COLLISION_SECTORS
             for h_y in (0.01, top_y):
-                for i in range(n_circle):
-                    for ci in (i, (i + 1) % n_circle):
-                        a = 2 * math.pi * ci / n_circle
-                        lx = rx * math.cos(a)
-                        s = math.sin(a)
-                        lz = (ry_front if s < 0 else ry_back) * s
+                for i in range(n_viz):
+                    for ci in (i, (i + 1) % n_viz):
+                        a = 2 * math.pi * ci / n_viz
+                        r = fly_collision_profile[ci] * fly_scale_collision + min_cam_fly_dist
+                        lx = r * math.cos(a)
+                        lz = r * math.sin(a)
                         wx = x + lx * cos_e + lz * sin_e
                         wz = y - lx * sin_e + lz * cos_e
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
             # 4 vertical lines
-            for i in range(0, n_circle, n_circle // 4):
-                a = 2 * math.pi * i / n_circle
-                lx = rx * math.cos(a)
-                lz = ry * math.sin(a)
+            for i in range(0, n_viz, max(1, n_viz // 4)):
+                a = 2 * math.pi * i / n_viz
+                r = fly_collision_profile[i] * fly_scale_collision + min_cam_fly_dist
+                lx = r * math.cos(a)
+                lz = r * math.sin(a)
                 wx = x + lx * cos_e + lz * sin_e
                 wz = y - lx * sin_e + lz * cos_e
                 line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
