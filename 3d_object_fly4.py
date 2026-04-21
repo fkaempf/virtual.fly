@@ -129,7 +129,6 @@ FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
 FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation (1.0 = real mm from ball)
-FICTRAC_EMA_TAU_S          = 0.04   # EMA time constant (seconds); lower = more responsive
 FICTRAC_EMA_TAU_MIN_S      = 0.02   # fastest EMA (used at high speed)
 FICTRAC_EMA_TAU_MAX_S      = 0.12   # slowest EMA (used when stationary, suppresses noise)
 FICTRAC_SPEED_SCALE_MM_S   = 5.0    # speed at which EMA reaches midpoint between min/max tau
@@ -1338,6 +1337,21 @@ def fly_cam_hull_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
     return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale, margin)
 
 
+def fly_cam_sphere_check(fly_x, fly_y, cam_x, cam_y, bound_radius_raw, scale, margin):
+    """Bounding sphere collision (2D circle in XZ). Uses max 3D vertex radius."""
+    dx = cam_x - fly_x
+    dy = cam_y - fly_y
+    dist = math.hypot(dx, dy)
+    threshold = bound_radius_raw * scale + margin
+    if dist >= threshold:
+        return False, 0.0, 0.0
+    # Push camera out along separation vector
+    if dist < 1e-6:
+        return True, threshold, 0.0
+    push_mag = threshold - dist + 0.01
+    return True, dx / dist * push_mag, dy / dist * push_mag
+
+
 def compute_camera_fly_distance_mm(fly_pos, cam_pos, cam_height_mm):
     """Return 3D distance between camera and fly, including camera height."""
     fx, fy = fly_pos
@@ -1547,6 +1561,8 @@ def main():
     fly_height_mm = float(extents[1]) * fly_base_scale
     # Compute convex hull of mesh XZ projection for collision
     fly_hull, fly_hull_normals = compute_mesh_hull_xz(pos, margin=0.0)
+    # Bounding radius from 3D mesh (max distance from center in any direction)
+    fly_bound_radius_raw = float(np.sqrt((pos ** 2).sum(axis=1).max()))
     print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm, Hull vertices: {len(fly_hull)}")
 
     fly_vao = GL.glGenVertexArrays(1)
@@ -1852,8 +1868,8 @@ def main():
                 y *= push_scale
 
             # OBB collision with camera — revert + slight push out
-            col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+            col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
+                                             fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
@@ -1890,8 +1906,8 @@ def main():
                 push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
-            col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+            col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
+                                             fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -2074,33 +2090,25 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            # Hull scale + margin converted to local space then back to world
-            sc = fly_scale_current
-            local_margin = min_cam_fly_dist / max(sc, 1e-9)
-            cos_y = math.cos(obb_yaw)
-            sin_y = math.sin(obb_yaw)
-            # Draw hull polygon as lines at floor level and fly height
-            # Expand hull vertices by margin in local space
-            expanded_hull = fly_hull + fly_hull_normals * local_margin
+            # Draw bounding circle at collision radius
+            collision_r = fly_bound_radius_raw * fly_scale_current + min_cam_fly_dist
+            n_circle = 32
             line_verts = []
-            n_hull = len(fly_hull)
-            for h_y in (0.01, fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current):
-                for i in range(n_hull):
-                    j = (i + 1) % n_hull
-                    for ci in (i, j):
-                        lx = expanded_hull[ci][0] * sc
-                        lz = expanded_hull[ci][1] * sc
-                        wx = x + lx * cos_y + lz * sin_y
-                        wz = y - lx * sin_y + lz * cos_y
+            top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current
+            for h_y in (0.01, top_y):
+                for i in range(n_circle):
+                    for ci in (i, (i + 1) % n_circle):
+                        a = 2 * math.pi * ci / n_circle
+                        wx = x + collision_r * math.cos(a)
+                        wz = y + collision_r * math.sin(a)
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
-            # Vertical lines at hull corners
-            for i in range(0, n_hull, max(1, n_hull // 8)):
-                lx = expanded_hull[i][0] * sc
-                lz = expanded_hull[i][1] * sc
-                wx = x + lx * cos_y + lz * sin_y
-                wz = y - lx * sin_y + lz * cos_y
+            # 4 vertical lines
+            for i in range(0, n_circle, n_circle // 4):
+                a = 2 * math.pi * i / n_circle
+                wx = x + collision_r * math.cos(a)
+                wz = y + collision_r * math.sin(a)
                 line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
-                line_verts.extend([wx, fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current, wz,  0,1,0,  0,1,0,1,  0,0])
+                line_verts.extend([wx, top_y, wz,  0,1,0,  0,1,0,1,  0,0])
             line_data = np.array(line_verts, dtype=np.float32)
             hitbox_model = np.eye(4, dtype=np.float32)
             hitbox_mvp = proj_mat @ view_mat @ hitbox_model
