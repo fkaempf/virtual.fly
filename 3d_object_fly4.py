@@ -2299,9 +2299,12 @@ def main():
             sin_e = math.sin(obb_yaw)
             line_verts = []
             top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_collision
-            # Draw radial profile shape
+            # Draw radial profile: multiple horizontal rings + many vertical lines
             n_viz = N_COLLISION_SECTORS
-            for h_y in (0.01, top_y):
+            n_h_rings = 6  # horizontal rings at different heights
+            n_v_lines = 24  # vertical lines around the perimeter
+            for hi in range(n_h_rings):
+                h_y = 0.01 + (top_y - 0.01) * hi / max(n_h_rings - 1, 1)
                 for i in range(n_viz):
                     for ci in (i, (i + 1) % n_viz):
                         a = 2 * math.pi * ci / n_viz
@@ -2311,8 +2314,8 @@ def main():
                         wx = x + lx * cos_e + lz * sin_e
                         wz = y - lx * sin_e + lz * cos_e
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
-            # 4 vertical lines
-            for i in range(0, n_viz, max(1, n_viz // 4)):
+            # Vertical lines
+            for i in range(0, n_viz, max(1, n_viz // n_v_lines)):
                 a = 2 * math.pi * i / n_viz
                 r = fly_collision_profile[i] * fly_scale_collision + min_cam_fly_dist
                 lx = r * math.cos(a)
