@@ -126,7 +126,7 @@ FICTRAC_PORT         = 2000
 FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock_port are read from it
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
-FICTRAC_TRANSLATION_GAIN = 10.0  # multiplier for x/y translation (increase if movement too slow)
+FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation (1.0 = real mm from ball)
 FICTRAC_JITTER_THRESH_MM = 0.05  # ignore per-frame translation deltas below this (mm)
 FICTRAC_JITTER_THRESH_RAD = 0.005  # ignore per-frame heading deltas below this (radians)
 
