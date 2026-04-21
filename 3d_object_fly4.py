@@ -93,6 +93,7 @@ TARGET_FPS = 60
 ARENA_FLOOR_COLOR    = (0.22, 0.22, 0.22)  # RGB float, light grey (will be brightened by lighting)
 ARENA_WALL_COLOR     = (0.15, 0.15, 0.15)  # RGB float, darker grey
 ARENA_WALL_HEIGHT_MM = 5.0
+ARENA_WALL_VISIBLE   = True  # set False to hide walls (--ARENA_WALL_VISIBLE false)
 
 # Lighting (four directional lights from above: N, E, S, W)
 LIGHT_AMBIENT = 0.6              # base ambient multiplier
@@ -1143,9 +1144,13 @@ def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=1
             floor_idx.extend([i0, o0, i1])
             floor_idx.extend([i1, o0, o1])
 
-    # Wall cylinder (uniform color)
+    # Wall cylinder (skip if height is 0)
     wall_verts = []
     wall_idx = []
+    if wall_height <= 0:
+        verts = np.array(floor_verts, dtype=np.float32)
+        idx = np.array(floor_idx, dtype=np.uint32)
+        return verts, idx
     base = len(floor_verts)
     n_wall_rows = 2
     for row in range(n_wall_rows + 1):
@@ -1478,7 +1483,8 @@ def main():
     # Arena geometry (floor + walls)
     # Wall at movement boundary + fly half-length + 2mm margin to avoid clipping
     arena_wall_radius = ARENA_RADIUS_MM + fly_half_l_raw * fly_base_scale + 3.0
-    arena_verts, arena_indices = build_arena_geometry(arena_wall_radius, ARENA_WALL_HEIGHT_MM)
+    arena_verts, arena_indices = build_arena_geometry(
+        arena_wall_radius, ARENA_WALL_HEIGHT_MM if ARENA_WALL_VISIBLE else 0)
     arena_vao = GL.glGenVertexArrays(1)
     arena_vbo = GL.glGenBuffers(1)
     arena_ebo = GL.glGenBuffers(1)
