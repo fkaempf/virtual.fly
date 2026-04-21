@@ -83,7 +83,7 @@ CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM  # treat camera as a second fly for over
 MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
 MIN_CAM_FLY_DIST_MM = 1.5
 MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
-COLLISION_NUDGE_MM   = 0.1  # how far to push apart on collision (mm)
+COLLISION_NUDGE_MM   = 0.5  # how far to push apart on collision (mm)
 WALL_MARGIN_MM       = 1.0  # how close fly/camera can get to arena wall (mm)
 
 BG_COLOR = (255, 255, 255)  # BGR
@@ -1802,11 +1802,13 @@ def main():
                                              fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
-                # tiny nudge to unstick
-                sep = math.hypot(x - camera_x, y - camera_y)
-                if sep > 1e-6:
-                    x += COLLISION_NUDGE_MM * (x - camera_x) / sep
-                    y += COLLISION_NUDGE_MM * (y - camera_y) / sep
+                # Re-check at prev position and use hull push vector if still colliding
+                col2, px2, py2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                     fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+                if col2:
+                    # Push fly using hull's edge-normal push vector
+                    x -= px2
+                    y -= py2
 
         else:
             moving = keys[pygame.K_w] or keys[pygame.K_s]
@@ -1898,15 +1900,16 @@ def main():
             wall_r = ARENA_RADIUS_MM - 1.0
             camera_x *= wall_r / r_cam_center
             camera_y *= wall_r / r_cam_center
-        col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                       fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+        col, cpx, cpy = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                              fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
-            sep = math.hypot(camera_x - x, camera_y - y)
-            if sep > 1e-6:
-                camera_x += COLLISION_NUDGE_MM * (camera_x - x) / sep
-                camera_y += COLLISION_NUDGE_MM * (camera_y - y) / sep
+            # Re-check and use hull push vector
+            col2, cpx2, cpy2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                    fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+            if col2:
+                camera_x += cpx2
+                camera_y += cpy2
 
         # Smooth scale based on live camera-fly distance so apparent size matches separation.
         apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
