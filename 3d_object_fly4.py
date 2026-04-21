@@ -1732,7 +1732,7 @@ def main():
     # Bounding radius from 3D mesh (max distance from center in any direction)
     fly_bound_radius_raw = float(np.sqrt((pos ** 2).sum(axis=1).max()))
     # Radial collision profile: max vertex reach per angular direction on XZ
-    N_COLLISION_SECTORS = 72
+    N_COLLISION_SECTORS = 360
     fly_collision_profile, _ = compute_radial_profile(pos, N_COLLISION_SECTORS)
     print(f"Collision profile: {N_COLLISION_SECTORS} sectors, max reach {fly_collision_profile.max():.4f}")
 
