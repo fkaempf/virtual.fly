@@ -1072,8 +1072,9 @@ def compute_light_dirs(elev_deg):
     return np.stack(dirs, axis=0)
 
 def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
-                         floor_noise_std=0.03, wall_noise_std=0.02):
-    """Generate floor disc + wall cylinder with per-vertex greyscale noise."""
+                         floor_noise_std=0.03, wall_noise_std=0.02, floor_radius_mult=10.0):
+    """Generate floor disc + wall cylinder with per-vertex greyscale noise.
+    Floor extends to radius * floor_radius_mult to appear infinite."""
     rng = np.random.default_rng(42)  # fixed seed for reproducibility
 
     # Floor disc (concentric rings subdivided into triangles)
@@ -1086,9 +1087,10 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
     c = np.clip(fc + n, 0, 1)
     floor_verts.append([0, 0, 0,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
 
-    # Ring vertices
+    # Ring vertices (floor extends beyond walls)
+    floor_r = radius * floor_radius_mult
     for ri in range(1, n_rings + 1):
-        r = radius * ri / n_rings
+        r = floor_r * ri / n_rings
         for si in range(n_segments):
             a = 2 * math.pi * si / n_segments
             x = r * math.cos(a)
@@ -1210,12 +1212,7 @@ def check_obb_collision(px, py, obb_cx, obb_cy, obb_yaw, half_w, half_l, margin=
 def fly_cam_obb_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
                        half_w_raw, half_l_raw, half_h_raw, scale, cam_radius,
                        cam_height=0.0, fly_y_offset=0.0):
-    """3D OBB check: XZ bounding box + Y height check."""
-    # Height check first: is camera within fly's vertical extent?
-    fly_bottom = fly_y_offset - half_h_raw * scale
-    fly_top = fly_y_offset + half_h_raw * scale
-    if cam_height < fly_bottom - cam_radius or cam_height > fly_top + cam_radius:
-        return False, 0.0, 0.0  # camera above or below fly
+    """OBB check: XZ bounding box (hitbox extends infinitely on Y)."""
     obb_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
     hw = half_w_raw * scale
     hl = half_l_raw * scale
