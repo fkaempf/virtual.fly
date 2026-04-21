@@ -238,20 +238,29 @@ CAM_BODY_RADIUS_MM = FLY_BODY_RADIUS_MM
 # ----------------- FICTRAC -----------------
 
 class FicTracReader:
-    """Non-blocking UDP reader for FicTrac closed-loop data."""
+    """Non-blocking UDP reader for FicTrac closed-loop data.
+
+    Decomposes the dr_lab rotation vector into yaw and ground-plane translation,
+    then applies adaptive EMA smoothing (heavier when stationary, lighter when
+    moving) to replace hard jitter thresholds.  All integration is done
+    camera-side from dr_lab deltas only — no dependency on FicTrac's integrated
+    heading (col 17).
+    """
     def __init__(self, host, port, ball_radius_mm):
         self.ball_radius = ball_radius_mm
         self.sock = None
         self.buf = ""
         self.connected = False
-        self.heading = 0.0    # integrated heading (radians)
-        self.pos_x = 0.0      # integrated x position (mm)
-        self.pos_y = 0.0      # integrated y position (mm)
-        self.speed = 0.0      # instantaneous speed (mm/s)
-        self.prev_heading = 0.0
-        self.prev_pos_x = 0.0
-        self.prev_pos_y = 0.0
-        self._first_frame = True  # skip first delta (jump from zero to current)
+        # Raw per-frame deltas (before smoothing)
+        self.d_heading = 0.0
+        self.d_forward = 0.0
+        self.d_side = 0.0
+        # EMA-smoothed velocities (radians/s and mm/s)
+        self._vh = 0.0   # heading rate
+        self._vf = 0.0   # forward velocity
+        self._vs = 0.0   # side velocity
+        self._last_t = None
+        self._dt = 1.0 / 60.0
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.bind((host, port))
@@ -293,39 +302,67 @@ class FicTracReader:
         if last_line is None:
             return False
         toks = last_line.split(", ")
-        # Handle both socket format (starts with "FT") and raw format
         offset = 1 if len(toks) > 0 and toks[0] == "FT" else 0
         if len(toks) < offset + 22:
             return False
         try:
-            # dr_lab is a rotation vector in lab coords (radians per frame).
-            # From FicTrac source (Trackball.cpp):
-            #   dr_lab[0] (col 6): rotation about x → sideways translation (negated)
-            #   dr_lab[1] (col 7): rotation about y → forward translation
-            #   dr_lab[2] (col 8): rotation about z → yaw/heading change
-            dr_lab_0 = float(toks[offset + 5])  # col 6
-            dr_lab_1 = float(toks[offset + 6])  # col 7
-            dr_lab_2 = float(toks[offset + 7])  # col 8
-            self.d_heading = dr_lab_2                          # yaw delta (radians)
-            self.d_forward = dr_lab_1 * self.ball_radius       # forward (mm)
-            self.d_side = -dr_lab_0 * self.ball_radius         # sideways (mm, negated per FicTrac convention)
-            self.heading = float(toks[offset + 16])            # col 17: integrated heading
-            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19: speed (mm)
+            # dr_lab: rotation vector in lab/animal frame (radians per frame).
+            # FicTrac lab frame: +X = animal-forward, +Y = animal-right, +Z = down.
+            dr_lab_0 = float(toks[offset + 5])  # col 6: rot about X (forward axis)
+            dr_lab_1 = float(toks[offset + 6])  # col 7: rot about Y (right axis)
+            dr_lab_2 = float(toks[offset + 7])  # col 8: rot about Z (down axis) → yaw
+
+            # --- Decompose rotation vector into yaw + ground-plane translation ---
+            # Yaw: rotation about the vertical (Z/down) axis
+            self.d_heading = dr_lab_2
+
+            # Translation: horizontal component of the rotation vector.
+            # Ball rolling about horizontal axis [rx, ry, 0] translates the
+            # contact point perpendicular to that axis.
+            horiz_mag = math.hypot(dr_lab_0, dr_lab_1)
+            if horiz_mag > 1e-12:
+                axis_angle = math.atan2(dr_lab_1, dr_lab_0)
+                move_angle = axis_angle - math.pi * 0.5
+                self.d_forward = math.cos(move_angle) * horiz_mag * self.ball_radius
+                self.d_side   = math.sin(move_angle) * horiz_mag * self.ball_radius
+            else:
+                self.d_forward = 0.0
+                self.d_side = 0.0
+
+            # --- Adaptive EMA smoothing ---
+            now = time.perf_counter()
+            if self._last_t is not None:
+                dt = max(now - self._last_t, 1e-6)
+                # Instantaneous speed → pick tau (slow when still, fast when moving)
+                spd = math.hypot(self.d_forward, self.d_side) / dt
+                blend = min(spd / FICTRAC_SPEED_SCALE_MM_S, 1.0)
+                tau = FICTRAC_EMA_TAU_MAX_S + (FICTRAC_EMA_TAU_MIN_S - FICTRAC_EMA_TAU_MAX_S) * blend
+                alpha = 1.0 - math.exp(-dt / tau)
+                self._vh += alpha * (self.d_heading / dt - self._vh)
+                self._vf += alpha * (self.d_forward / dt - self._vf)
+                self._vs += alpha * (self.d_side    / dt - self._vs)
+            else:
+                dt = 1.0 / 60.0
+                self._vh = self.d_heading / dt
+                self._vf = self.d_forward / dt
+                self._vs = self.d_side / dt
+            self._last_t = now
+            self._dt = dt
         except (ValueError, IndexError):
             return False
         return True
 
     def delta_heading(self):
-        """Per-frame heading change (radians). dr_lab[2] = yaw."""
-        return self.d_heading
+        """Smoothed heading change for this frame (radians)."""
+        return self._vh * self._dt
 
     def delta_forward(self):
-        """Per-frame forward movement (mm). dr_lab[1] * ball_radius."""
-        return self.d_forward
+        """Smoothed forward displacement for this frame (mm)."""
+        return self._vf * self._dt
 
     def delta_side(self):
-        """Per-frame sideways movement (mm). -dr_lab[0] * ball_radius."""
-        return self.d_side
+        """Smoothed sideways displacement for this frame (mm)."""
+        return self._vs * self._dt
 
     def close(self):
         if self.sock:
@@ -1252,9 +1289,9 @@ def compute_mesh_hull_xz(verts_xyz, margin=0.0):
     return hull, normals
 
 
-def check_hull_collision(px, py, fly_x, fly_y, fly_yaw, hull, normals, scale):
-    """Check if point (px,py) is inside the scaled+rotated convex hull.
-    Returns (colliding, push_x, push_y)."""
+def check_hull_collision(px, py, fly_x, fly_y, fly_yaw, hull, normals, scale, margin_mm):
+    """Check if point (px,py) is inside the scaled+rotated convex hull + margin.
+    margin_mm is in world mm, converted to local space via scale."""
     # Transform point into fly's local frame
     dx = px - fly_x
     dy = py - fly_y
@@ -1262,23 +1299,26 @@ def check_hull_collision(px, py, fly_x, fly_y, fly_yaw, hull, normals, scale):
     sin_y = math.sin(-fly_yaw)
     local_x = (dx * cos_y - dy * sin_y) / scale
     local_y = (dx * sin_y + dy * cos_y) / scale
+    # Margin in local (mesh) space
+    local_margin = margin_mm / max(scale, 1e-9)
 
-    # Point-in-convex-hull: check if point is on the inside of all edges
+    # Point-in-convex-hull: check if point is on the inside of all edges + margin
     n = len(hull)
     min_dist = float('inf')
     min_nx, min_ny = 0.0, 0.0
     for i in range(n):
         # Signed distance to edge (positive = outside)
         d = (local_x - hull[i][0]) * normals[i][0] + (local_y - hull[i][1]) * normals[i][1]
-        if d > 0:
-            return False, 0.0, 0.0  # outside this edge → no collision
-        if -d < min_dist:
-            min_dist = -d
+        if d > local_margin:
+            return False, 0.0, 0.0  # outside this edge + margin → no collision
+        pen = local_margin - d  # penetration depth
+        if pen < min_dist:
+            min_dist = pen
             min_nx = normals[i][0]
             min_ny = normals[i][1]
 
-    # Inside hull — push out along nearest edge normal
-    push_local_x = min_nx * (min_dist + 0.01)  # tiny extra to clear
+    # Inside hull+margin — push out along nearest edge normal
+    push_local_x = min_nx * (min_dist + 0.01)
     push_local_y = min_ny * (min_dist + 0.01)
     # Scale and rotate back to world
     push_local_x *= scale
@@ -1295,7 +1335,7 @@ def fly_cam_hull_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
                         hull, normals, scale, margin):
     """Convex hull collision check between camera point and fly model."""
     fly_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
-    return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale + margin)
+    return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale, margin)
 
 
 def compute_camera_fly_distance_mm(fly_pos, cam_pos, cam_height_mm):
@@ -1864,16 +1904,9 @@ def main():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
             d_fwd = fictrac.delta_forward() * FICTRAC_TRANSLATION_GAIN
             d_side = fictrac.delta_side() * FICTRAC_TRANSLATION_GAIN
-            # Jitter filter: ignore tiny deltas (noise when ball is stationary)
-            if abs(dh) < FICTRAC_JITTER_THRESH_RAD:
-                dh = 0.0
-            if abs(d_fwd) < FICTRAC_JITTER_THRESH_MM:
-                d_fwd = 0.0
-            if abs(d_side) < FICTRAC_JITTER_THRESH_MM:
-                d_side = 0.0
             # Clamp movement to prevent tunneling through collision hull
             max_step = min_cam_fly_dist * 0.5
-            move_mag = math.sqrt(d_fwd * d_fwd + d_side * d_side)
+            move_mag = math.hypot(d_fwd, d_side)
             if move_mag > max_step:
                 scale_down = max_step / move_mag
                 d_fwd *= scale_down
@@ -2041,25 +2074,29 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            sc = fly_scale_current + min_cam_fly_dist
+            # Hull scale + margin converted to local space then back to world
+            sc = fly_scale_current
+            local_margin = min_cam_fly_dist / max(sc, 1e-9)
             cos_y = math.cos(obb_yaw)
             sin_y = math.sin(obb_yaw)
             # Draw hull polygon as lines at floor level and fly height
+            # Expand hull vertices by margin in local space
+            expanded_hull = fly_hull + fly_hull_normals * local_margin
             line_verts = []
             n_hull = len(fly_hull)
             for h_y in (0.01, fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current):
                 for i in range(n_hull):
                     j = (i + 1) % n_hull
                     for ci in (i, j):
-                        lx = fly_hull[ci][0] * sc
-                        lz = fly_hull[ci][1] * sc
+                        lx = expanded_hull[ci][0] * sc
+                        lz = expanded_hull[ci][1] * sc
                         wx = x + lx * cos_y + lz * sin_y
                         wz = y - lx * sin_y + lz * cos_y
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
             # Vertical lines at hull corners
             for i in range(0, n_hull, max(1, n_hull // 8)):
-                lx = fly_hull[i][0] * sc
-                lz = fly_hull[i][1] * sc
+                lx = expanded_hull[i][0] * sc
+                lz = expanded_hull[i][1] * sc
                 wx = x + lx * cos_y + lz * sin_y
                 wz = y - lx * sin_y + lz * cos_y
                 line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
