@@ -1076,6 +1076,13 @@ def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=1
     fc = ARENA_FLOOR_COLOR
     wc = ARENA_WALL_COLOR
 
+    def floor_shade(x, z, tile=3.0, amp=0.03):
+        """Repeating local pattern based on position. Tiles every `tile` mm."""
+        # Simple spatial hash: sin waves at incommensurate frequencies
+        v = (math.sin(x * 2.17 / tile + z * 1.31 / tile) *
+             math.sin(z * 1.87 / tile - x * 0.93 / tile))
+        return amp * v  # returns -amp to +amp
+
     # Floor disc (concentric rings, denser near center, sparser at edges)
     floor_verts = []
     floor_idx = []
@@ -1093,7 +1100,11 @@ def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=1
             a = 2 * math.pi * si / n_segments
             x = r * math.cos(a)
             z = r * math.sin(a)
-            floor_verts.append([x, 0, z,  0, 1, 0,  fc[0], fc[1], fc[2], 1,  0, 0])
+            s = floor_shade(x, z)
+            cr = max(0.0, min(1.0, fc[0] + s))
+            cg = max(0.0, min(1.0, fc[1] + s))
+            cb = max(0.0, min(1.0, fc[2] + s))
+            floor_verts.append([x, 0, z,  0, 1, 0,  cr, cg, cb, 1,  0, 0])
 
     # Indices: center fan for first ring
     for si in range(n_segments):
