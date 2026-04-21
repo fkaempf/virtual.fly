@@ -1373,19 +1373,61 @@ def fly_cam_hull_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
     return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale, margin)
 
 
-def fly_cam_sphere_check(fly_x, fly_y, cam_x, cam_y, bound_radius_raw, scale, margin):
-    """Bounding sphere collision (2D circle in XZ). Uses max 3D vertex radius."""
+def fly_cam_ellipse_check(fly_x, fly_y, cam_x, cam_y, fly_yaw,
+                           half_w_raw, half_l_raw, scale, margin):
+    """Oriented ellipse collision (tight on sides, long front-to-back).
+    half_w_raw = mesh X half-extent (width), half_l_raw = mesh Z half-extent (length)."""
+    # Transform camera into fly's local frame
     dx = cam_x - fly_x
     dy = cam_y - fly_y
-    dist = math.hypot(dx, dy)
-    threshold = bound_radius_raw * scale + margin
-    if dist >= threshold:
+    cos_y = math.cos(-fly_yaw)
+    sin_y = math.sin(-fly_yaw)
+    local_x = dx * cos_y - dy * sin_y  # side axis (width)
+    local_y = dx * sin_y + dy * cos_y  # forward axis (length)
+
+    # Ellipse radii in world space
+    rx = half_w_raw * scale + margin  # side radius (tighter)
+    ry = half_l_raw * scale + margin  # front-back radius (longer)
+
+    # Normalized distance (inside ellipse if < 1)
+    if rx < 1e-9 or ry < 1e-9:
         return False, 0.0, 0.0
-    # Push camera out along separation vector
-    if dist < 1e-6:
-        return True, threshold, 0.0
-    push_mag = threshold - dist + 0.01
-    return True, dx / dist * push_mag, dy / dist * push_mag
+    nx = local_x / rx
+    ny = local_y / ry
+    d2 = nx * nx + ny * ny
+
+    if d2 >= 1.0:
+        return False, 0.0, 0.0  # outside ellipse
+
+    # Inside — push out along the ellipse gradient (steepest escape)
+    # Gradient of the ellipse function at (local_x, local_y)
+    gx = 2.0 * local_x / (rx * rx)
+    gy = 2.0 * local_y / (ry * ry)
+    glen = math.sqrt(gx * gx + gy * gy)
+    if glen < 1e-9:
+        return True, rx, 0.0
+
+    # Distance to ellipse boundary along gradient direction
+    # Find t such that ((local_x + t*gx/glen)/rx)^2 + ((local_y + t*gy/glen)/ry)^2 = 1
+    ngx, ngy = gx / glen, gy / glen
+    a_coeff = (ngx / rx) ** 2 + (ngy / ry) ** 2
+    b_coeff = 2.0 * (local_x * ngx / (rx * rx) + local_y * ngy / (ry * ry))
+    c_coeff = d2 - 1.0
+    disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff
+    if disc < 0:
+        t_push = 0.1
+    else:
+        t_push = (-b_coeff + math.sqrt(disc)) / (2.0 * a_coeff) + 0.01
+
+    # Rotate push back to world
+    push_lx = ngx * t_push
+    push_ly = ngy * t_push
+    cos_y2 = math.cos(fly_yaw)
+    sin_y2 = math.sin(fly_yaw)
+    world_px = push_lx * cos_y2 - push_ly * sin_y2
+    world_py = push_lx * sin_y2 + push_ly * cos_y2
+
+    return True, world_px, world_py
 
 
 def compute_camera_fly_distance_mm(fly_pos, cam_pos, cam_height_mm):
@@ -1902,8 +1944,9 @@ def main():
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
 
             # OBB collision with camera — revert + slight push out
-            col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
-                                             fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+            col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
+                                             heading + math.pi + math.radians(yaw_offset_deg),
+                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
@@ -1938,8 +1981,9 @@ def main():
             dx_move = x - prev_x
             dy_move = y - prev_y
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
-            col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
-                                             fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+            col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
+                                             heading + math.pi + math.radians(yaw_offset_deg),
+                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -1999,8 +2043,9 @@ def main():
         cam_dx = camera_x - prev_cam_x
         cam_dy = camera_y - prev_cam_y
         camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
-        col, cpx, cpy = fly_cam_sphere_check(x, y, camera_x, camera_y,
-                                              fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+        col, cpx, cpy = fly_cam_ellipse_check(x, y, camera_x, camera_y,
+                                              heading + math.pi + math.radians(yaw_offset_deg),
+                                              fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
@@ -2119,23 +2164,30 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            # Draw bounding circle at collision radius
-            collision_r = fly_bound_radius_raw * fly_scale_current + min_cam_fly_dist
-            n_circle = 32
+            # Draw oriented ellipse at collision boundary
+            rx = fly_half_w_raw * fly_scale_current + min_cam_fly_dist  # side
+            ry = fly_half_l_raw * fly_scale_current + min_cam_fly_dist  # front-back
+            cos_e = math.cos(obb_yaw)
+            sin_e = math.sin(obb_yaw)
+            n_circle = 48
             line_verts = []
             top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current
             for h_y in (0.01, top_y):
                 for i in range(n_circle):
                     for ci in (i, (i + 1) % n_circle):
                         a = 2 * math.pi * ci / n_circle
-                        wx = x + collision_r * math.cos(a)
-                        wz = y + collision_r * math.sin(a)
+                        lx = rx * math.cos(a)
+                        lz = ry * math.sin(a)
+                        wx = x + lx * cos_e + lz * sin_e
+                        wz = y - lx * sin_e + lz * cos_e
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
             # 4 vertical lines
             for i in range(0, n_circle, n_circle // 4):
                 a = 2 * math.pi * i / n_circle
-                wx = x + collision_r * math.cos(a)
-                wz = y + collision_r * math.sin(a)
+                lx = rx * math.cos(a)
+                lz = ry * math.sin(a)
+                wx = x + lx * cos_e + lz * sin_e
+                wz = y - lx * sin_e + lz * cos_e
                 line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
                 line_verts.extend([wx, top_y, wz,  0,1,0,  0,1,0,1,  0,0])
             line_data = np.array(line_verts, dtype=np.float32)
