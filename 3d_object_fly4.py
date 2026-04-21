@@ -1811,12 +1811,12 @@ def main():
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_hull, fly_hull_normals, fly_base_scale, min_cam_fly_dist)
+                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
                 col2, px2, py2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                     fly_hull, fly_hull_normals, fly_base_scale, min_cam_fly_dist)
+                                                     fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
                 if col2:
                     # Push fly using hull's edge-normal push vector
                     x -= px2
@@ -1849,7 +1849,7 @@ def main():
                 x *= push_scale
                 y *= push_scale
             col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_hull, fly_hull_normals, fly_base_scale, min_cam_fly_dist)
+                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -1913,12 +1913,12 @@ def main():
             camera_x *= wall_r / r_cam_center
             camera_y *= wall_r / r_cam_center
         col, cpx, cpy = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                              fly_hull, fly_hull_normals, fly_base_scale, min_cam_fly_dist)
+                                              fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
             col2, cpx2, cpy2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                    fly_hull, fly_hull_normals, fly_base_scale, min_cam_fly_dist)
+                                                    fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col2:
                 camera_x += cpx2
                 camera_y += cpy2
@@ -2032,7 +2032,7 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            sc = fly_base_scale + min_cam_fly_dist
+            sc = fly_scale_current + min_cam_fly_dist
             cos_y = math.cos(obb_yaw)
             sin_y = math.sin(obb_yaw)
             # Draw hull polygon as lines at floor level and fly height
