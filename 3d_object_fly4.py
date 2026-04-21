@@ -1638,6 +1638,7 @@ def main():
     use_fictrac = fictrac.connected  # auto-detect; keyboard fallback if not running
     fictrac_paused = False  # F key temporarily pauses FicTrac, uses keyboard instead
     show_help = False  # F1 toggles hotkey help overlay
+    show_hitbox = False  # B toggles hitbox visualization on minimap
 
     # warp toggle: True = warped, False = raw camera texture
     use_warp = True
@@ -1674,6 +1675,9 @@ def main():
                 elif event.key == pygame.K_f:
                     fictrac_paused = not fictrac_paused
                     print(f"FicTrac paused: {fictrac_paused}")
+                elif event.key == pygame.K_b:
+                    show_hitbox = not show_hitbox
+                    print(f"Hitbox display: {show_hitbox}")
                 elif event.key == pygame.K_F1:
                     show_help = not show_help
                 elif event.key == pygame.K_u:
@@ -1975,6 +1979,66 @@ def main():
             )
         GL.glBindVertexArray(0)
 
+        # Hitbox wireframe (toggle with B key)
+        if show_hitbox:
+            obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
+            hw = fly_half_w_raw * fly_scale_current + min_cam_fly_dist
+            hl = fly_half_l_raw * fly_scale_current + min_cam_fly_dist
+            hh = float(extents[1]) * fly_scale_current  # full height
+            cy = fly_y_offset  # center height
+            cos_y = math.cos(obb_yaw)
+            sin_y = math.sin(obb_yaw)
+            # 8 corners of the OBB in world space
+            corners = []
+            for sx in (-1, 1):
+                for sz in (-1, 1):
+                    for sy in (-1, 1):
+                        lx = sx * hw
+                        lz = sz * hl
+                        ly = cy + sy * hh * 0.5
+                        wx = x + lx * cos_y + lz * sin_y
+                        wz = y - lx * sin_y + lz * cos_y
+                        corners.append([wx, ly, wz])
+            # 12 edges of the box
+            edges = [(0,1),(2,3),(4,5),(6,7),  # vertical
+                     (0,2),(1,3),(4,6),(5,7),  # bottom/top rings
+                     (0,4),(1,5),(2,6),(3,7)]  # connecting
+            line_verts = []
+            for a, b in edges:
+                for ci in (a, b):
+                    cx, cy2, cz = corners[ci]
+                    line_verts.extend([cx, cy2, cz,  0,1,0,  0,1,0,1,  0,0])  # green color
+            line_data = np.array(line_verts, dtype=np.float32)
+            hitbox_model = np.eye(4, dtype=np.float32)
+            hitbox_mvp = proj_mat @ view_mat @ hitbox_model
+            GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, hitbox_mvp.T.astype(np.float32))
+            GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, hitbox_model.T.astype(np.float32))
+            GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1,1,1,1], dtype=np.float32))
+            GL.glUniform1i(u_fly_has_tex_loc, 0)
+            GL.glUniform1f(u_fly_ambient_loc, 1.0)
+            GL.glUniform4fv(u_fly_light_int_loc, 1, np.zeros(4, dtype=np.float32))
+            tmp_vao = GL.glGenVertexArrays(1)
+            tmp_vbo = GL.glGenBuffers(1)
+            GL.glBindVertexArray(tmp_vao)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, tmp_vbo)
+            GL.glBufferData(GL.GL_ARRAY_BUFFER, line_data.nbytes, line_data, GL.GL_STREAM_DRAW)
+            stride_f2 = 12 * 4
+            GL.glEnableVertexAttribArray(0)
+            GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(0))
+            GL.glEnableVertexAttribArray(1)
+            GL.glVertexAttribPointer(1, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(12))
+            GL.glEnableVertexAttribArray(2)
+            GL.glVertexAttribPointer(2, 4, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(24))
+            GL.glEnableVertexAttribArray(3)
+            GL.glVertexAttribPointer(3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(40))
+            GL.glDrawArrays(GL.GL_LINES, 0, len(edges) * 2)
+            GL.glBindVertexArray(0)
+            GL.glDeleteBuffers(1, [tmp_vbo])
+            GL.glDeleteVertexArrays(1, [tmp_vao])
+            # Restore fly lighting
+            GL.glUniform1f(u_fly_ambient_loc, float(LIGHT_AMBIENT))
+            GL.glUniform4fv(u_fly_light_int_loc, 1, np.array(LIGHT_INTENSITIES, dtype=np.float32))
+
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         GL.glDisable(GL.GL_DEPTH_TEST)
 
@@ -2051,6 +2115,9 @@ def main():
             elif cv_lo == ord('f'):
                 fictrac_paused = not fictrac_paused
                 print(f"FicTrac paused: {fictrac_paused}")
+            elif cv_lo == ord('b'):
+                show_hitbox = not show_hitbox
+                print(f"Hitbox display: {show_hitbox}")
             elif cv_lo == ord('h'):
                 show_help = not show_help
             elif cv_lo == ord('-'):
