@@ -1073,7 +1073,7 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=3.0):
+def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=5.0):
     """Generate floor disc + wall cylinder. Floor extends to appear infinite."""
     fc = ARENA_FLOOR_COLOR
     wc = ARENA_WALL_COLOR
@@ -1107,7 +1107,7 @@ def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=
     # Floor disc (concentric rings, denser near center, sparser at edges)
     floor_verts = []
     floor_idx = []
-    n_rings = 80
+    n_rings = 400
     floor_r = radius * floor_radius_mult
 
     # Center vertex
@@ -1241,7 +1241,8 @@ def check_obb_collision(px, py, obb_cx, obb_cy, obb_yaw, half_w, half_l, margin=
 def fly_cam_obb_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
                        half_w_raw, half_l_raw, half_h_raw, scale, cam_radius,
                        cam_height=0.0, fly_y_offset=0.0):
-    """OBB check: XZ bounding box (hitbox extends infinitely on Y)."""
+    """OBB check: XZ bounding box (hitbox extends infinitely on Y).
+    Half-extents from full GLB mesh bounding box (all meshes)."""
     obb_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
     hw = half_w_raw * scale
     hl = half_l_raw * scale
