@@ -1215,6 +1215,42 @@ def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=
     return verts, idx
 
 
+def arena_constrain(x, y, dx, dy, arena_radius, margin=None):
+    """Move (x,y) by (dx,dy) with sub-stepped circular arena enforcement.
+    Uses tangent-projection wall sliding so entities glide along the
+    boundary instead of sticking."""
+    if margin is None:
+        margin = WALL_MARGIN_MM
+    max_r = arena_radius - margin
+    max_step = max_r * 0.1
+
+    disp = math.hypot(dx, dy)
+    if disp < 1e-9:
+        r = math.hypot(x, y)
+        if r > max_r:
+            x *= max_r / r
+            y *= max_r / r
+        return x, y
+
+    n_steps = min(16, max(1, math.ceil(disp / max_step)))
+    sdx, sdy = dx / n_steps, dy / n_steps
+
+    for _ in range(n_steps):
+        x += sdx
+        y += sdy
+        r = math.hypot(x, y)
+        if r > max_r:
+            nx, ny = x / r, y / r
+            x = nx * max_r
+            y = ny * max_r
+            dot_n = sdx * nx + sdy * ny
+            if dot_n > 0:
+                sdx -= dot_n * nx
+                sdy -= dot_n * ny
+
+    return x, y
+
+
 def enforce_min_distance(pos, other, min_dist):
     px, py = pos
     ox, oy = other
@@ -1860,12 +1896,10 @@ def main():
                         auto_state = "pause"
                         auto_state_t_remaining = np.random.exponential(AUTO_MEAN_PAUSE_DUR)
 
-            r_center = math.hypot(x, y)
-            if r_center > ARENA_RADIUS_MM:
-                # Push inward by nudge amount
-                push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
-                x *= push_scale
-                y *= push_scale
+            # Arena boundary with sub-stepped wall sliding
+            dx_move = x - prev_x
+            dy_move = y - prev_y
+            x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
@@ -1901,11 +1935,9 @@ def main():
                 x += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
                 y += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
 
-            r_center = math.hypot(x, y)
-            if r_center > ARENA_RADIUS_MM:
-                push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
-                x *= push_scale
-                y *= push_scale
+            dx_move = x - prev_x
+            dy_move = y - prev_y
+            x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
             col, px, py = fly_cam_sphere_check(x, y, camera_x, camera_y,
                                              fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
             if col:
@@ -1964,14 +1996,11 @@ def main():
         if keys[pygame.K_COMMA]:
             cam_height -= CAMERA_Z_SPEED_MM_S * dt
 
-        r_cam_center = math.hypot(camera_x, camera_y)
-        if r_cam_center > ARENA_RADIUS_MM:
-            # Slide along wall: project movement onto tangent, then clamp radius
-            wall_r = ARENA_RADIUS_MM - 1.0
-            camera_x *= wall_r / r_cam_center
-            camera_y *= wall_r / r_cam_center
-        col, cpx, cpy = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                              fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+        cam_dx = camera_x - prev_cam_x
+        cam_dy = camera_y - prev_cam_y
+        camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
+        col, cpx, cpy = fly_cam_sphere_check(x, y, camera_x, camera_y,
+                                              fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
