@@ -1208,7 +1208,14 @@ def check_obb_collision(px, py, obb_cx, obb_cy, obb_yaw, half_w, half_l, margin=
 
 
 def fly_cam_obb_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
-                       half_w_raw, half_l_raw, scale, cam_radius):
+                       half_w_raw, half_l_raw, half_h_raw, scale, cam_radius,
+                       cam_height=0.0, fly_y_offset=0.0):
+    """3D OBB check: XZ bounding box + Y height check."""
+    # Height check first: is camera within fly's vertical extent?
+    fly_bottom = fly_y_offset - half_h_raw * scale
+    fly_top = fly_y_offset + half_h_raw * scale
+    if cam_height < fly_bottom - cam_radius or cam_height > fly_top + cam_radius:
+        return False, 0.0, 0.0  # camera above or below fly
     obb_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
     hw = half_w_raw * scale
     hl = half_l_raw * scale
@@ -1419,6 +1426,7 @@ def main():
     )
     mesh_longest_raw = float(longest)
     fly_half_w_raw = float(extents[0]) * 0.5  # half-width (X axis in model space)
+    fly_half_h_raw = float(extents[1]) * 0.5  # half-height (Y axis)
     fly_half_l_raw = float(extents[2]) * 0.5  # half-length (Z axis, nose-to-tail)
     fly_height_mm = float(extents[1]) * fly_base_scale
     print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm")
@@ -1722,7 +1730,8 @@ def main():
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
             if col:
                 x, y = prev_x, prev_y
                 # tiny nudge to unstick
@@ -1758,7 +1767,8 @@ def main():
                 x *= push_scale
                 y *= push_scale
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -1822,7 +1832,8 @@ def main():
             camera_x *= wall_r / r_cam_center
             camera_y *= wall_r / r_cam_center
         col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                       fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                       fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             sep = math.hypot(camera_x - x, camera_y - y)
@@ -1891,8 +1902,8 @@ def main():
 
         GL.glUseProgram(fly_prog)
 
-        # Render arena (floor + walls) first
-        arena_model = np.eye(4, dtype=np.float32)
+        # Render arena (floor + walls) first — push down slightly to avoid near-plane clipping
+        arena_model = mat4_translate(0.0, -0.1, 0.0)
         arena_mvp = proj_mat @ view_mat @ arena_model
         GL.glBindVertexArray(arena_vao)
         GL.glUniformMatrix4fv(u_fly_view_loc, 1, GL.GL_FALSE, view_mat.T.astype(np.float32))
