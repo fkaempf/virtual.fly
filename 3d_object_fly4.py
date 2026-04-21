@@ -84,6 +84,7 @@ MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
 MIN_CAM_FLY_DIST_MM = 1.5
 MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
 COLLISION_NUDGE_MM   = 0.5  # how far to push apart on collision (mm)
+COLLISION_FRONT_PAD  = 2.0  # extra mm padding at front of fly (equirect makes head loom)
 WALL_MARGIN_MM       = 1.0  # how close fly/camera can get to arena wall (mm)
 
 BG_COLOR = (255, 255, 255)  # BGR
@@ -1385,9 +1386,11 @@ def fly_cam_ellipse_check(fly_x, fly_y, cam_x, cam_y, fly_yaw,
     local_x = dx * cos_y - dy * sin_y  # side axis (width)
     local_y = dx * sin_y + dy * cos_y  # forward axis (length)
 
-    # Ellipse radii in world space
+    # Ellipse radii in world space — asymmetric front/back
     rx = half_w_raw * scale + margin  # side radius (tighter)
-    ry = half_l_raw * scale + margin  # front-back radius (longer)
+    ry_back = half_l_raw * scale + margin  # back radius
+    ry_front = half_l_raw * scale + margin + COLLISION_FRONT_PAD  # front radius (extra padding for equirect head loom)
+    ry = ry_front if local_y < 0 else ry_back  # front = negative local_y
 
     # Normalized distance (inside ellipse if < 1)
     if rx < 1e-9 or ry < 1e-9:
@@ -2170,7 +2173,8 @@ def main():
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
             # Draw oriented ellipse at collision boundary
             rx = fly_half_w_raw * fly_scale_collision + min_cam_fly_dist  # side
-            ry = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist  # front-back (3D max radius)
+            ry_back = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist
+            ry_front = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist + COLLISION_FRONT_PAD
             cos_e = math.cos(obb_yaw)
             sin_e = math.sin(obb_yaw)
             n_circle = 48
@@ -2181,7 +2185,8 @@ def main():
                     for ci in (i, (i + 1) % n_circle):
                         a = 2 * math.pi * ci / n_circle
                         lx = rx * math.cos(a)
-                        lz = ry * math.sin(a)
+                        s = math.sin(a)
+                        lz = (ry_front if s < 0 else ry_back) * s
                         wx = x + lx * cos_e + lz * sin_e
                         wz = y - lx * sin_e + lz * cos_e
                         line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
