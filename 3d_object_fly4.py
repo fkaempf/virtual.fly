@@ -129,8 +129,10 @@ FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
 FICTRAC_TRANSLATION_GAIN = 1.0  # multiplier for x/y translation (1.0 = real mm from ball)
-FICTRAC_JITTER_THRESH_MM = 0.05  # ignore per-frame translation deltas below this (mm)
-FICTRAC_JITTER_THRESH_RAD = 0.005  # ignore per-frame heading deltas below this (radians)
+FICTRAC_EMA_TAU_S          = 0.04   # EMA time constant (seconds); lower = more responsive
+FICTRAC_EMA_TAU_MIN_S      = 0.02   # fastest EMA (used at high speed)
+FICTRAC_EMA_TAU_MAX_S      = 0.12   # slowest EMA (used when stationary, suppresses noise)
+FICTRAC_SPEED_SCALE_MM_S   = 5.0    # speed at which EMA reaches midpoint between min/max tau
 
 
 # 3D fly camera FOV (sane perspective, independent of arena FOV)
@@ -1869,6 +1871,13 @@ def main():
                 d_fwd = 0.0
             if abs(d_side) < FICTRAC_JITTER_THRESH_MM:
                 d_side = 0.0
+            # Clamp movement to prevent tunneling through collision hull
+            max_step = min_cam_fly_dist * 0.5
+            move_mag = math.sqrt(d_fwd * d_fwd + d_side * d_side)
+            if move_mag > max_step:
+                scale_down = max_step / move_mag
+                d_fwd *= scale_down
+                d_side *= scale_down
             # Apply heading change
             cam_heading += dh
             # Move camera in its heading direction (forward/side relative to camera)
