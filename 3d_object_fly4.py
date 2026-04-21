@@ -1193,60 +1193,95 @@ def enforce_min_distance(pos, other, min_dist):
             py = oy + dy * scale
     return px, py
 
-def check_obb_collision(px, py, obb_cx, obb_cy, obb_yaw, half_w, half_l, margin=0.0):
-    """Check if point (px,py) is inside the OBB defined by center, yaw, half-extents + margin.
-    Returns (colliding, push_x, push_y) where push vector moves point outside."""
-    # Transform point into OBB's local frame
-    dx = px - obb_cx
-    dy = py - obb_cy
-    cos_y = math.cos(-obb_yaw)
-    sin_y = math.sin(-obb_yaw)
-    local_x = dx * cos_y - dy * sin_y
-    local_y = dx * sin_y + dy * cos_y
+def compute_mesh_hull_xz(verts_xyz, margin=0.0):
+    """Compute 2D convex hull of mesh projected onto XZ plane (model space).
+    Returns hull vertices as Nx2 array + precomputed edge normals."""
+    pts_2d = verts_xyz[:, [0, 2]]  # project to XZ
+    # Andrew's monotone chain convex hull
+    pts_sorted = pts_2d[np.lexsort((pts_2d[:, 1], pts_2d[:, 0]))]
+    # Remove duplicates
+    unique = [pts_sorted[0]]
+    for p in pts_sorted[1:]:
+        if abs(p[0] - unique[-1][0]) > 1e-9 or abs(p[1] - unique[-1][1]) > 1e-9:
+            unique.append(p)
+    pts_sorted = np.array(unique)
+    def cross2d(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lower = []
+    for p in pts_sorted:
+        while len(lower) >= 2 and cross2d(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts_sorted):
+        while len(upper) >= 2 and cross2d(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    hull = np.array(lower[:-1] + upper[:-1], dtype=np.float64)
+    # Expand hull outward by margin
+    if margin > 0 and len(hull) >= 3:
+        center = hull.mean(axis=0)
+        dirs = hull - center
+        lengths = np.sqrt((dirs ** 2).sum(axis=1, keepdims=True))
+        lengths = np.maximum(lengths, 1e-9)
+        hull = hull + dirs / lengths * margin
+    # Precompute edge normals (outward-pointing)
+    n = len(hull)
+    normals = np.zeros((n, 2), dtype=np.float64)
+    for i in range(n):
+        j = (i + 1) % n
+        ex = hull[j][0] - hull[i][0]
+        ey = hull[j][1] - hull[i][1]
+        ln = math.sqrt(ex * ex + ey * ey)
+        if ln > 1e-9:
+            normals[i] = (ey / ln, -ex / ln)  # outward normal
+    return hull.astype(np.float64), normals
 
-    # Check overlap with expanded box (half-extents + margin)
-    hw = half_w + margin
-    hl = half_l + margin
 
-    if abs(local_x) >= hw or abs(local_y) >= hl:
-        return False, 0.0, 0.0  # no collision
+def check_hull_collision(px, py, fly_x, fly_y, fly_yaw, hull, normals, scale):
+    """Check if point (px,py) is inside the scaled+rotated convex hull.
+    Returns (colliding, push_x, push_y)."""
+    # Transform point into fly's local frame
+    dx = px - fly_x
+    dy = py - fly_y
+    cos_y = math.cos(-fly_yaw)
+    sin_y = math.sin(-fly_yaw)
+    local_x = (dx * cos_y - dy * sin_y) / scale
+    local_y = (dx * sin_y + dy * cos_y) / scale
 
-    # Find shortest push-out direction
-    push_right = hw - local_x
-    push_left = hw + local_x
-    push_fwd = hl - local_y
-    push_back = hl + local_y
+    # Point-in-convex-hull: check if point is on the inside of all edges
+    n = len(hull)
+    min_dist = float('inf')
+    min_nx, min_ny = 0.0, 0.0
+    for i in range(n):
+        # Signed distance to edge (positive = outside)
+        d = (local_x - hull[i][0]) * normals[i][0] + (local_y - hull[i][1]) * normals[i][1]
+        if d > 0:
+            return False, 0.0, 0.0  # outside this edge → no collision
+        if -d < min_dist:
+            min_dist = -d
+            min_nx = normals[i][0]
+            min_ny = normals[i][1]
 
-    min_push = min(push_right, push_left, push_fwd, push_back)
-
-    # Local push direction
-    if min_push == push_right:
-        lx, ly = min_push, 0.0
-    elif min_push == push_left:
-        lx, ly = -min_push, 0.0
-    elif min_push == push_fwd:
-        lx, ly = 0.0, min_push
-    else:
-        lx, ly = 0.0, -min_push
-
-    # Rotate push vector back to world frame
-    cos_y2 = math.cos(obb_yaw)
-    sin_y2 = math.sin(obb_yaw)
-    world_px = lx * cos_y2 - ly * sin_y2
-    world_py = lx * sin_y2 + ly * cos_y2
+    # Inside hull — push out along nearest edge normal
+    push_local_x = min_nx * (min_dist + 0.01)  # tiny extra to clear
+    push_local_y = min_ny * (min_dist + 0.01)
+    # Scale and rotate back to world
+    push_local_x *= scale
+    push_local_y *= scale
+    cos_y2 = math.cos(fly_yaw)
+    sin_y2 = math.sin(fly_yaw)
+    world_px = push_local_x * cos_y2 - push_local_y * sin_y2
+    world_py = push_local_x * sin_y2 + push_local_y * cos_y2
 
     return True, world_px, world_py
 
 
-def fly_cam_obb_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
-                       half_w_raw, half_l_raw, half_h_raw, scale, cam_radius,
-                       cam_height=0.0, fly_y_offset=0.0):
-    """OBB check: XZ bounding box (hitbox extends infinitely on Y).
-    Half-extents from full GLB mesh bounding box (all meshes)."""
-    obb_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
-    hw = half_w_raw * scale
-    hl = half_l_raw * scale
-    return check_obb_collision(cam_x, cam_y, fly_x, fly_y, obb_yaw, hw, hl, cam_radius)
+def fly_cam_hull_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
+                        hull, normals, scale, margin):
+    """Convex hull collision check between camera point and fly model."""
+    fly_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
+    return check_hull_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, hull, normals, scale + margin)
 
 
 def compute_camera_fly_distance_mm(fly_pos, cam_pos, cam_height_mm):
@@ -1456,7 +1491,9 @@ def main():
     fly_half_h_raw = float(extents[1]) * 0.5  # half-height (Y axis)
     fly_half_l_raw = float(extents[2]) * 0.5  # half-length (Z axis, nose-to-tail)
     fly_height_mm = float(extents[1]) * fly_base_scale
-    print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm")
+    # Compute convex hull of mesh XZ projection for collision
+    fly_hull, fly_hull_normals = compute_mesh_hull_xz(pos, margin=0.0)
+    print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm, Hull vertices: {len(fly_hull)}")
 
     fly_vao = GL.glGenVertexArrays(1)
     fly_vbo = GL.glGenBuffers(1)
@@ -1761,9 +1798,8 @@ def main():
                 y *= push_scale
 
             # OBB collision with camera — revert + slight push out
-            col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+            col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # tiny nudge to unstick
@@ -1798,9 +1834,8 @@ def main():
                 push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
-            col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+            col, px, py = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                             fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -1982,32 +2017,29 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            hw = fly_half_w_raw * fly_scale_current + min_cam_fly_dist
-            hl = fly_half_l_raw * fly_scale_current + min_cam_fly_dist
-            hh = float(extents[1]) * fly_scale_current
-            cy = fly_y_offset
+            sc = fly_scale_current + min_cam_fly_dist
             cos_y = math.cos(obb_yaw)
             sin_y = math.sin(obb_yaw)
-            # 8 corners of the OBB in world space
-            corners = []
-            for sx in (-1, 1):
-                for sz in (-1, 1):
-                    for sy in (-1, 1):
-                        lx = sx * hw
-                        lz = sz * hl
-                        ly = cy + sy * hh * 0.5
+            # Draw hull polygon as lines at floor level and fly height
+            line_verts = []
+            n_hull = len(fly_hull)
+            for h_y in (0.01, fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current):
+                for i in range(n_hull):
+                    j = (i + 1) % n_hull
+                    for ci in (i, j):
+                        lx = fly_hull[ci][0] * sc
+                        lz = fly_hull[ci][1] * sc
                         wx = x + lx * cos_y + lz * sin_y
                         wz = y - lx * sin_y + lz * cos_y
-                        corners.append([wx, ly, wz])
-            # 12 edges of the box
-            edges = [(0,1),(2,3),(4,5),(6,7),  # vertical
-                     (0,2),(1,3),(4,6),(5,7),  # bottom/top rings
-                     (0,4),(1,5),(2,6),(3,7)]  # connecting
-            line_verts = []
-            for a, b in edges:
-                for ci in (a, b):
-                    cx, cy2, cz = corners[ci]
-                    line_verts.extend([cx, cy2, cz,  0,1,0,  0,1,0,1,  0,0])  # green color
+                        line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
+            # Vertical lines at hull corners
+            for i in range(0, n_hull, max(1, n_hull // 8)):
+                lx = fly_hull[i][0] * sc
+                lz = fly_hull[i][1] * sc
+                wx = x + lx * cos_y + lz * sin_y
+                wz = y - lx * sin_y + lz * cos_y
+                line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
+                line_verts.extend([wx, fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current, wz,  0,1,0,  0,1,0,1,  0,0])
             line_data = np.array(line_verts, dtype=np.float32)
             hitbox_model = np.eye(4, dtype=np.float32)
             hitbox_mvp = proj_mat @ view_mat @ hitbox_model
@@ -2031,7 +2063,7 @@ def main():
             GL.glVertexAttribPointer(2, 4, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(24))
             GL.glEnableVertexAttribArray(3)
             GL.glVertexAttribPointer(3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(40))
-            GL.glDrawArrays(GL.GL_LINES, 0, len(edges) * 2)
+            GL.glDrawArrays(GL.GL_LINES, 0, len(line_verts) // 12)
             GL.glBindVertexArray(0)
             GL.glDeleteBuffers(1, [tmp_vbo])
             GL.glDeleteVertexArrays(1, [tmp_vao])
