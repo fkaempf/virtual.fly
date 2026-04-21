@@ -1411,10 +1411,8 @@ def main():
     mesh_longest_raw = float(longest)
     fly_half_w_raw = float(extents[0]) * 0.5  # half-width (X axis in model space)
     fly_half_l_raw = float(extents[2]) * 0.5  # half-length (Z axis, nose-to-tail)
-    # Camera height = fly body height + half (eye level of a conspecific)
     fly_height_mm = float(extents[1]) * fly_base_scale
-    CAM_HEIGHT_MM = fly_height_mm + fly_height_mm * 0.5
-    print(f"Camera height set to {CAM_HEIGHT_MM:.3f} mm (fly height {fly_height_mm:.3f} + 50%)")
+    print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm")
 
     fly_vao = GL.glGenVertexArrays(1)
     fly_vbo = GL.glGenBuffers(1)
