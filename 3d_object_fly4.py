@@ -1946,7 +1946,7 @@ def main():
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                              heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
@@ -1983,7 +1983,7 @@ def main():
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
             col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                              heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -2045,7 +2045,7 @@ def main():
         camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
         col, cpx, cpy = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                               heading + math.pi + math.radians(yaw_offset_deg),
-                                              fly_half_w_raw, fly_half_l_raw, fly_scale_current, min_cam_fly_dist)
+                                              fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
@@ -2166,7 +2166,7 @@ def main():
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
             # Draw oriented ellipse at collision boundary
             rx = fly_half_w_raw * fly_scale_current + min_cam_fly_dist  # side
-            ry = fly_half_l_raw * fly_scale_current + min_cam_fly_dist  # front-back
+            ry = fly_bound_radius_raw * fly_scale_current + min_cam_fly_dist  # front-back (3D max radius)
             cos_e = math.cos(obb_yaw)
             sin_e = math.sin(obb_yaw)
             n_circle = 48
