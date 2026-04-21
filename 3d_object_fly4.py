@@ -93,7 +93,8 @@ TARGET_FPS = 60
 ARENA_FLOOR_COLOR    = (0.22, 0.22, 0.22)  # RGB float, light grey (will be brightened by lighting)
 ARENA_WALL_COLOR     = (0.15, 0.15, 0.15)  # RGB float, darker grey
 ARENA_WALL_HEIGHT_MM = 5.0
-ARENA_WALL_VISIBLE   = True  # set False to hide walls (--ARENA_WALL_VISIBLE false)
+ARENA_WALL_VISIBLE   = True   # set False to hide walls (--ARENA_WALL_VISIBLE false)
+ARENA_WALL_ALPHA     = 1.0    # wall opacity 0.0-1.0 (--ARENA_WALL_ALPHA 0.5 for transparent)
 
 # Lighting (four directional lights from above: N, E, S, W)
 LIGHT_AMBIENT = 0.6              # base ambient multiplier
@@ -422,6 +423,9 @@ void main() {
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
         vec3 dir = normalize(-view_pos.xyz);
+        // Clamp dir.z so behind-camera vertices map to FOV edge
+        // instead of wrapping around (prevents floor tearing)
+        dir.z = max(dir.z, 0.001);
         float half_fov_x = max(u_fovX * 0.5, 1e-6);
         float half_fov_y = max(u_fovY * 0.5, 1e-6);
         float az = atan(dir.x, dir.z);
@@ -486,7 +490,7 @@ void main() {
     gain = min(gain, u_lightMaxGain);
 
     vec3 col = base * gain;
-    fragColor = vec4(col, 1.0);
+    fragColor = vec4(col, v_color.a);
 }
 """
 
@@ -1072,7 +1076,7 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=10.0):
+def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=10.0):
     """Generate floor disc + wall cylinder. Floor extends to appear infinite."""
     fc = ARENA_FLOOR_COLOR
     wc = ARENA_WALL_COLOR
@@ -1161,7 +1165,7 @@ def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=1
             z = radius * math.sin(a)
             nx = math.cos(a)
             nz = math.sin(a)
-            wall_verts.append([x, y, z,  -nx, 0, -nz,  wc[0], wc[1], wc[2], 1,  0, 0])
+            wall_verts.append([x, y, z,  -nx, 0, -nz,  wc[0], wc[1], wc[2], ARENA_WALL_ALPHA,  0, 0])
 
     cols = n_segments + 1
     for row in range(n_wall_rows):
@@ -1941,13 +1945,12 @@ def main():
         GL.glUniform1i(u_fly_proj_mode_loc, proj_mode)
         GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1, 1, 1, 1], dtype=np.float32))
         GL.glUniform1i(u_fly_has_tex_loc, 0)
-        # Flat shading for arena: ambient only, no directional lights
-        GL.glUniform1f(u_fly_ambient_loc, 1.0)
-        GL.glUniform4fv(u_fly_light_int_loc, 1, np.zeros(4, dtype=np.float32))
+        if ARENA_WALL_ALPHA < 1.0:
+            GL.glEnable(GL.GL_BLEND)
+            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
         GL.glDrawElements(GL.GL_TRIANGLES, arena_n_indices, GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
-        # Restore fly lighting
-        GL.glUniform1f(u_fly_ambient_loc, float(LIGHT_AMBIENT))
-        GL.glUniform4fv(u_fly_light_int_loc, 1, np.array(LIGHT_INTENSITIES, dtype=np.float32))
+        if ARENA_WALL_ALPHA < 1.0:
+            GL.glDisable(GL.GL_BLEND)
         GL.glBindVertexArray(0)
 
         # Render fly model
