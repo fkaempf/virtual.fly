@@ -1076,12 +1076,31 @@ def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=1
     fc = ARENA_FLOOR_COLOR
     wc = ARENA_WALL_COLOR
 
-    def floor_shade(x, z, tile=3.0, amp=0.03):
-        """Repeating local pattern based on position. Tiles every `tile` mm."""
-        # Simple spatial hash: sin waves at incommensurate frequencies
-        v = (math.sin(x * 2.17 / tile + z * 1.31 / tile) *
-             math.sin(z * 1.87 / tile - x * 0.93 / tile))
-        return amp * v  # returns -amp to +amp
+    def floor_shade(x, z, amp=0.03):
+        """Irregular repeating local pattern (value noise via spatial hash)."""
+        # Hash-based pseudo-random: deterministic from position, no visible tiling
+        def _hash(ix, iz):
+            n = ix * 374761393 + iz * 668265263
+            n = (n ^ (n >> 13)) * 1274126177
+            return ((n ^ (n >> 16)) & 0xFFFF) / 65535.0  # 0..1
+
+        # Cell coordinates (1mm grid)
+        gx = x * 0.7  # stretch to avoid axis-aligned patterns
+        gz = z * 0.7
+        ix = math.floor(gx)
+        iz = math.floor(gz)
+        fx = gx - ix
+        fz = gz - iz
+        # Smoothstep interpolation
+        ux = fx * fx * (3 - 2 * fx)
+        uz = fz * fz * (3 - 2 * fz)
+        # Bilinear blend of 4 corner hash values
+        v00 = _hash(ix, iz)
+        v10 = _hash(ix + 1, iz)
+        v01 = _hash(ix, iz + 1)
+        v11 = _hash(ix + 1, iz + 1)
+        v = v00 * (1 - ux) * (1 - uz) + v10 * ux * (1 - uz) + v01 * (1 - ux) * uz + v11 * ux * uz
+        return amp * (v * 2 - 1)  # returns -amp to +amp
 
     # Floor disc (concentric rings, denser near center, sparser at edges)
     floor_verts = []
