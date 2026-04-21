@@ -163,6 +163,7 @@ CAM_TRAIL_THICK  = 2
 MINIMAP_HZ   = 60
 
 USE_AUTOMATIC_FLY = True
+NUM_FLIES         = 1    # number of virtual flies (--NUM_FLIES 3)
 
 AUTO_MEAN_RUN_DUR   = 1.0
 AUTO_MEAN_PAUSE_DUR = 0.7
