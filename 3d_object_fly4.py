@@ -113,7 +113,7 @@ BACK_MM_S        = SPEED_MM_S * 0.64
 TURN_DEG_S       = 200
 STAND_TURN_MULT  = 1.5
 
-START_POS         = (0, -20)
+START_POS         = (0, 0)   # (0,0) = random spawn; set explicit coords to fix position
 START_HEADING_DEG = 0.0
 
 CAMERA_SPEED_MM_S      = SPEED_MM_S
@@ -1870,9 +1870,17 @@ def main():
         FLY_CAM_FLIP_MODEL_FOR_ULTRAWIDE and proj_mode != 0 and fov_x_deg_effective > 180.0
     )
 
-    # state
-    x, y = START_POS
-    heading = math.radians(START_HEADING_DEG)
+    # state — random spawn if START_POS is (0, 0), otherwise use configured position
+    if START_POS == (0, 0):
+        spawn_angle = np.random.uniform(0, 2 * math.pi)
+        spawn_r = np.random.uniform(0.3, 0.7) * ARENA_RADIUS_MM
+        x = spawn_r * math.cos(spawn_angle)
+        y = spawn_r * math.sin(spawn_angle)
+        heading = np.random.uniform(0, 2 * math.pi)
+        print(f"Fly spawned at ({x:.1f}, {y:.1f}) heading {math.degrees(heading):.0f}°")
+    else:
+        x, y = START_POS
+        heading = math.radians(START_HEADING_DEG)
 
     auto_state = "pause"
     auto_state_t_remaining = np.random.exponential(AUTO_MEAN_PAUSE_DUR)
@@ -2081,14 +2089,22 @@ def main():
             col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                              fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
             if col:
+                # Slide fly along collision boundary
+                fly_dx = x - prev_x
+                fly_dy = y - prev_y
                 x, y = prev_x, prev_y
-                # Re-check at prev position and use hull push vector if still colliding
-                col2, px2, py2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                     fly_hull, fly_hull_normals, fly_scale_collision, min_cam_fly_dist)
-                if col2:
-                    # Push fly using hull's edge-normal push vector
-                    x -= px2
-                    y -= py2
+                push_len = math.hypot(px, py)
+                if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
+                    nx, ny = px / push_len, py / push_len
+                    dot_n = fly_dx * nx + fly_dy * ny
+                    slide_dx = fly_dx - dot_n * nx
+                    slide_dy = fly_dy - dot_n * ny
+                    x = prev_x + slide_dx
+                    y = prev_y + slide_dy
+                    col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                       fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                    if col2:
+                        x, y = prev_x, prev_y
 
         else:
             moving = keys[pygame.K_w] or keys[pygame.K_s]
@@ -2117,11 +2133,21 @@ def main():
             col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                              fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
             if col:
+                fly_dx = x - prev_x
+                fly_dy = y - prev_y
                 x, y = prev_x, prev_y
-                sep = math.hypot(x - camera_x, y - camera_y)
-                if sep > 1e-6:
-                    x += COLLISION_NUDGE_MM * (x - camera_x) / sep
-                    y += COLLISION_NUDGE_MM * (y - camera_y) / sep
+                push_len = math.hypot(px, py)
+                if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
+                    nx, ny = px / push_len, py / push_len
+                    dot_n = fly_dx * nx + fly_dy * ny
+                    slide_dx = fly_dx - dot_n * nx
+                    slide_dy = fly_dy - dot_n * ny
+                    x = prev_x + slide_dx
+                    y = prev_y + slide_dy
+                    col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                       fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                    if col2:
+                        x, y = prev_x, prev_y
 
         # camera controls — FicTrac (F key to temporarily pause) or keyboard fallback
         if use_fictrac and not fictrac_paused and fictrac.poll():
@@ -2178,10 +2204,25 @@ def main():
         col, cpx, cpy = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
                                               fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
         if col:
+            # Slide along collision boundary: remove normal component, keep tangent
             camera_x, camera_y = prev_cam_x, prev_cam_y
-            # Re-check and use hull push vector
-            col2, cpx2, cpy2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                    fly_hull, fly_hull_normals, fly_scale_collision, min_cam_fly_dist)
+            push_len = math.hypot(cpx, cpy)
+            if push_len > 1e-6 and math.hypot(cam_dx, cam_dy) > 1e-6:
+                # Normal direction (from push vector)
+                nx, ny = cpx / push_len, cpy / push_len
+                # Remove normal component from movement
+                dot_n = cam_dx * nx + cam_dy * ny
+                slide_dx = cam_dx - dot_n * nx
+                slide_dy = cam_dy - dot_n * ny
+                # Apply slide movement
+                camera_x = prev_cam_x + slide_dx
+                camera_y = prev_cam_y + slide_dy
+                # Re-check after slide
+                col2, cpx2, cpy2 = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                          fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                if col2:
+                    camera_x = prev_cam_x + cpx2
+                    camera_y = prev_cam_y + cpy2
             if col2:
                 camera_x += cpx2
                 camera_y += cpy2
