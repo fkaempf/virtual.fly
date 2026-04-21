@@ -423,9 +423,6 @@ void main() {
         gl_Position = vec4(proj.x, proj.y, depth, 1.0);
     } else if (u_projMode == 2) {
         vec3 dir = normalize(-view_pos.xyz);
-        // Clamp dir.z so behind-camera vertices map to FOV edge
-        // instead of wrapping around (prevents floor tearing)
-        dir.z = max(dir.z, 0.001);
         float half_fov_x = max(u_fovX * 0.5, 1e-6);
         float half_fov_y = max(u_fovY * 0.5, 1e-6);
         float az = atan(dir.x, dir.z);
@@ -1076,7 +1073,7 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=10.0):
+def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=3.0):
     """Generate floor disc + wall cylinder. Floor extends to appear infinite."""
     fc = ARENA_FLOOR_COLOR
     wc = ARENA_WALL_COLOR
@@ -1110,7 +1107,7 @@ def build_arena_geometry(radius, wall_height, n_segments=128, floor_radius_mult=
     # Floor disc (concentric rings, denser near center, sparser at edges)
     floor_verts = []
     floor_idx = []
-    n_rings = 40
+    n_rings = 80
     floor_r = radius * floor_radius_mult
 
     # Center vertex
