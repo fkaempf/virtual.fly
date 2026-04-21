@@ -84,6 +84,7 @@ MIN_CAM_FLY_DIST_MM = FLY_BODY_RADIUS_MM + CAM_BODY_RADIUS_MM
 MIN_CAM_FLY_DIST_MM = 1.5
 MIN_DIST_ADJ_STEP_MM = 0.5  # step for live min-distance tuning (keys -/=)
 COLLISION_NUDGE_MM   = 0.1  # how far to push apart on collision (mm)
+WALL_MARGIN_MM       = 1.0  # how close fly/camera can get to arena wall (mm)
 
 BG_COLOR = (255, 255, 255)  # BGR
 TARGET_FPS = 60
@@ -293,28 +294,34 @@ class FicTracReader:
         if len(toks) < offset + 22:
             return False
         try:
-            # Per-frame delta rotation in lab coords (radians)
-            self.dr_x = float(toks[offset + 5]) * self.ball_radius   # col 6: dr_lab x (side)
-            self.dr_y = float(toks[offset + 6]) * self.ball_radius   # col 7: dr_lab y (yaw)
-            self.dr_z = float(toks[offset + 7]) * self.ball_radius   # col 8: dr_lab z (forward)
-            self.heading = float(toks[offset + 16])                   # col 17: integrated heading
-            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19: speed
-            self.d_heading = float(toks[offset + 6])                  # col 7: yaw delta (radians, not scaled by radius)
+            # dr_lab is a rotation vector in lab coords (radians per frame).
+            # From FicTrac source (Trackball.cpp):
+            #   dr_lab[0] (col 6): rotation about x → sideways translation (negated)
+            #   dr_lab[1] (col 7): rotation about y → forward translation
+            #   dr_lab[2] (col 8): rotation about z → yaw/heading change
+            dr_lab_0 = float(toks[offset + 5])  # col 6
+            dr_lab_1 = float(toks[offset + 6])  # col 7
+            dr_lab_2 = float(toks[offset + 7])  # col 8
+            self.d_heading = dr_lab_2                          # yaw delta (radians)
+            self.d_forward = dr_lab_1 * self.ball_radius       # forward (mm)
+            self.d_side = -dr_lab_0 * self.ball_radius         # sideways (mm, negated per FicTrac convention)
+            self.heading = float(toks[offset + 16])            # col 17: integrated heading
+            self.speed = float(toks[offset + 18]) * self.ball_radius  # col 19: speed (mm)
         except (ValueError, IndexError):
             return False
         return True
 
     def delta_heading(self):
-        """Per-frame heading change (radians)."""
+        """Per-frame heading change (radians). dr_lab[2] = yaw."""
         return self.d_heading
 
     def delta_forward(self):
-        """Per-frame forward movement (mm, in fly's heading direction)."""
-        return self.dr_z
+        """Per-frame forward movement (mm). dr_lab[1] * ball_radius."""
+        return self.d_forward
 
     def delta_side(self):
-        """Per-frame sideways movement (mm, positive = right)."""
-        return self.dr_x
+        """Per-frame sideways movement (mm). -dr_lab[0] * ball_radius."""
+        return self.d_side
 
     def close(self):
         if self.sock:
@@ -1709,7 +1716,7 @@ def main():
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
                 # Push inward by nudge amount
-                push_scale = (ARENA_RADIUS_MM - 1.0) / r_center  # 1mm wall nudge
+                push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
 
@@ -1747,7 +1754,7 @@ def main():
 
             r_center = math.hypot(x, y)
             if r_center > ARENA_RADIUS_MM:
-                push_scale = (ARENA_RADIUS_MM - 1.0) / r_center  # 1mm wall nudge
+                push_scale = (ARENA_RADIUS_MM - WALL_MARGIN_MM) / r_center  # 1mm wall nudge
                 x *= push_scale
                 y *= push_scale
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
