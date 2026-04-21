@@ -1899,6 +1899,10 @@ def main():
         prev_x, prev_y = x, y
         prev_cam_x, prev_cam_y = camera_x, camera_y
 
+        # Compute instantaneous collision scale (no smoothing lag)
+        apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
+        fly_scale_collision = fly_base_scale * (screen_distance_mm / max(apparent_distance_mm, 1e-6))
+
         # fly behaviour
         if USE_AUTOMATIC_FLY:
             moving = False
@@ -1946,12 +1950,12 @@ def main():
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                              heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
                 col2, px2, py2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                     fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+                                                     fly_hull, fly_hull_normals, fly_scale_collision, min_cam_fly_dist)
                 if col2:
                     # Push fly using hull's edge-normal push vector
                     x -= px2
@@ -1983,7 +1987,7 @@ def main():
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
             col, px, py = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                              heading + math.pi + math.radians(yaw_offset_deg),
-                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+                                             fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -2045,12 +2049,12 @@ def main():
         camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
         col, cpx, cpy = fly_cam_ellipse_check(x, y, camera_x, camera_y,
                                               heading + math.pi + math.radians(yaw_offset_deg),
-                                              fly_half_w_raw, fly_bound_radius_raw, fly_scale_current, min_cam_fly_dist)
+                                              fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
             col2, cpx2, cpy2 = fly_cam_hull_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                    fly_hull, fly_hull_normals, fly_scale_current, min_cam_fly_dist)
+                                                    fly_hull, fly_hull_normals, fly_scale_collision, min_cam_fly_dist)
             if col2:
                 camera_x += cpx2
                 camera_y += cpy2
@@ -2165,13 +2169,13 @@ def main():
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
             # Draw oriented ellipse at collision boundary
-            rx = fly_half_w_raw * fly_scale_current + min_cam_fly_dist  # side
-            ry = fly_bound_radius_raw * fly_scale_current + min_cam_fly_dist  # front-back (3D max radius)
+            rx = fly_half_w_raw * fly_scale_collision + min_cam_fly_dist  # side
+            ry = fly_bound_radius_raw * fly_scale_collision + min_cam_fly_dist  # front-back (3D max radius)
             cos_e = math.cos(obb_yaw)
             sin_e = math.sin(obb_yaw)
             n_circle = 48
             line_verts = []
-            top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_current
+            top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_collision
             for h_y in (0.01, top_y):
                 for i in range(n_circle):
                     for ci in (i, (i + 1) % n_circle):
