@@ -126,6 +126,8 @@ FICTRAC_CONFIG       = ""  # path to FicTrac config file; if set, sock_host/sock
 FICTRAC_BALL_RADIUS_MM = 4.5  # ball radius to convert radians → mm
 FICTRAC_HEADING_GAIN   = 1.0  # multiplier for heading (1.0 = 1:1 mapping)
 FICTRAC_TRANSLATION_GAIN = 10.0  # multiplier for x/y translation (increase if movement too slow)
+FICTRAC_JITTER_THRESH_MM = 0.05  # ignore per-frame translation deltas below this (mm)
+FICTRAC_JITTER_THRESH_RAD = 0.005  # ignore per-frame heading deltas below this (radians)
 
 
 # 3D fly camera FOV (sane perspective, independent of arena FOV)
@@ -1762,6 +1764,13 @@ def main():
             dh = fictrac.delta_heading() * FICTRAC_HEADING_GAIN
             d_fwd = fictrac.delta_forward() * FICTRAC_TRANSLATION_GAIN
             d_side = fictrac.delta_side() * FICTRAC_TRANSLATION_GAIN
+            # Jitter filter: ignore tiny deltas (noise when ball is stationary)
+            if abs(dh) < FICTRAC_JITTER_THRESH_RAD:
+                dh = 0.0
+            if abs(d_fwd) < FICTRAC_JITTER_THRESH_MM:
+                d_fwd = 0.0
+            if abs(d_side) < FICTRAC_JITTER_THRESH_MM:
+                d_side = 0.0
             # Apply heading change
             cam_heading += dh
             # Move camera in its heading direction (forward/side relative to camera)
