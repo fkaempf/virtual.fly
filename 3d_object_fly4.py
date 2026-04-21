@@ -1935,7 +1935,13 @@ def main():
         GL.glUniform1i(u_fly_proj_mode_loc, proj_mode)
         GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1, 1, 1, 1], dtype=np.float32))
         GL.glUniform1i(u_fly_has_tex_loc, 0)
+        # Flat shading for arena: ambient only, no directional lights
+        GL.glUniform1f(u_fly_ambient_loc, 1.0)
+        GL.glUniform4fv(u_fly_light_int_loc, 1, np.zeros(4, dtype=np.float32))
         GL.glDrawElements(GL.GL_TRIANGLES, arena_n_indices, GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+        # Restore fly lighting
+        GL.glUniform1f(u_fly_ambient_loc, float(LIGHT_AMBIENT))
+        GL.glUniform4fv(u_fly_light_int_loc, 1, np.array(LIGHT_INTENSITIES, dtype=np.float32))
         GL.glBindVertexArray(0)
 
         # Render fly model
