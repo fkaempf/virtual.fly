@@ -1762,8 +1762,8 @@ def main():
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_base_scale, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_base_scale)
             if col:
                 x, y = prev_x, prev_y
                 # tiny nudge to unstick
@@ -1799,8 +1799,8 @@ def main():
                 x *= push_scale
                 y *= push_scale
             col, px, py = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+                                             fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_base_scale, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_base_scale)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -1864,8 +1864,8 @@ def main():
             camera_x *= wall_r / r_cam_center
             camera_y *= wall_r / r_cam_center
         col, _, _ = fly_cam_obb_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                       fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_scale_current, min_cam_fly_dist,
-                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_scale_current)
+                                       fly_half_w_raw, fly_half_l_raw, fly_half_h_raw, fly_base_scale, min_cam_fly_dist,
+                                             cam_height=cam_height, fly_y_offset=float(extents[1]) * 0.5 * fly_base_scale)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             sep = math.hypot(camera_x - x, camera_y - y)
@@ -1982,10 +1982,10 @@ def main():
         # Hitbox wireframe (toggle with B key)
         if show_hitbox:
             obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            hw = fly_half_w_raw * fly_scale_current + min_cam_fly_dist
-            hl = fly_half_l_raw * fly_scale_current + min_cam_fly_dist
-            hh = float(extents[1]) * fly_scale_current  # full height
-            cy = fly_y_offset  # center height
+            hw = fly_half_w_raw * fly_base_scale + min_cam_fly_dist
+            hl = fly_half_l_raw * fly_base_scale + min_cam_fly_dist
+            hh = float(extents[1]) * fly_base_scale  # full height (physical)
+            cy = float(extents[1]) * 0.5 * fly_base_scale  # center height (physical)
             cos_y = math.cos(obb_yaw)
             sin_y = math.sin(obb_yaw)
             # 8 corners of the OBB in world space
