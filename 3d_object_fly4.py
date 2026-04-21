@@ -1071,33 +1071,29 @@ def compute_light_dirs(elev_deg):
     dirs = [d / max(np.linalg.norm(d), 1e-6) for d in dirs]
     return np.stack(dirs, axis=0)
 
-def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
-                         floor_noise_std=0.03, wall_noise_std=0.02, floor_radius_mult=10.0):
-    """Generate floor disc + wall cylinder with per-vertex greyscale noise.
-    Floor extends to radius * floor_radius_mult to appear infinite."""
-    rng = np.random.default_rng(42)  # fixed seed for reproducibility
+def build_arena_geometry(radius, wall_height, n_segments=64, floor_radius_mult=10.0):
+    """Generate floor disc + wall cylinder. Floor extends to appear infinite."""
+    fc = ARENA_FLOOR_COLOR
+    wc = ARENA_WALL_COLOR
 
-    # Floor disc (concentric rings subdivided into triangles)
+    # Floor disc (concentric rings, denser near center, sparser at edges)
     floor_verts = []
     floor_idx = []
-    fc = np.array(ARENA_FLOOR_COLOR, dtype=np.float64)
+    n_rings = 40
+    floor_r = radius * floor_radius_mult
 
     # Center vertex
-    n = float(np.clip(rng.normal(0, floor_noise_std), -0.1, 0.1))
-    c = np.clip(fc + n, 0, 1)
-    floor_verts.append([0, 0, 0,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
+    floor_verts.append([0, 0, 0,  0, 1, 0,  fc[0], fc[1], fc[2], 1,  0, 0])
 
-    # Ring vertices (floor extends beyond walls)
-    floor_r = radius * floor_radius_mult
+    # Ring vertices — quadratic spacing (dense near center, sparse at edge)
     for ri in range(1, n_rings + 1):
-        r = floor_r * ri / n_rings
+        t = ri / n_rings
+        r = floor_r * t * t  # quadratic: more rings near center
         for si in range(n_segments):
             a = 2 * math.pi * si / n_segments
             x = r * math.cos(a)
             z = r * math.sin(a)
-            n = float(np.clip(rng.normal(0, floor_noise_std), -0.1, 0.1))
-            c = np.clip(fc + n, 0, 1)  # same offset for R,G,B = greyscale
-            floor_verts.append([x, 0, z,  0, 1, 0,  c[0], c[1], c[2], 1,  0, 0])
+            floor_verts.append([x, 0, z,  0, 1, 0,  fc[0], fc[1], fc[2], 1,  0, 0])
 
     # Indices: center fan for first ring
     for si in range(n_segments):
@@ -1117,12 +1113,11 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
             floor_idx.extend([i0, o0, i1])
             floor_idx.extend([i1, o0, o1])
 
-    # Wall cylinder with noise
-    wc = np.array(ARENA_WALL_COLOR, dtype=np.float64)
+    # Wall cylinder (uniform color)
     wall_verts = []
     wall_idx = []
     base = len(floor_verts)
-    n_wall_rows = 4  # vertical subdivisions for noise
+    n_wall_rows = 2
     for row in range(n_wall_rows + 1):
         y = wall_height * row / n_wall_rows
         for si in range(n_segments + 1):
@@ -1131,9 +1126,7 @@ def build_arena_geometry(radius, wall_height, n_rings=20, n_segments=64,
             z = radius * math.sin(a)
             nx = math.cos(a)
             nz = math.sin(a)
-            n = float(np.clip(rng.normal(0, wall_noise_std), -0.1, 0.1))
-            c = np.clip(wc + n, 0, 1)  # greyscale noise
-            wall_verts.append([x, y, z,  -nx, 0, -nz,  c[0], c[1], c[2], 1,  0, 0])
+            wall_verts.append([x, y, z,  -nx, 0, -nz,  wc[0], wc[1], wc[2], 1,  0, 0])
 
     cols = n_segments + 1
     for row in range(n_wall_rows):
