@@ -1195,47 +1195,59 @@ def enforce_min_distance(pos, other, min_dist):
 
 def compute_mesh_hull_xz(verts_xyz, margin=0.0):
     """Compute 2D convex hull of mesh projected onto XZ plane (model space).
-    Returns hull vertices as Nx2 array + precomputed edge normals."""
-    pts_2d = verts_xyz[:, [0, 2]]  # project to XZ
-    # Andrew's monotone chain convex hull
-    pts_sorted = pts_2d[np.lexsort((pts_2d[:, 1], pts_2d[:, 0]))]
-    # Remove duplicates
-    unique = [pts_sorted[0]]
-    for p in pts_sorted[1:]:
-        if abs(p[0] - unique[-1][0]) > 1e-9 or abs(p[1] - unique[-1][1]) > 1e-9:
-            unique.append(p)
-    pts_sorted = np.array(unique)
+    Uses numpy for speed on large meshes. Returns hull vertices + edge normals."""
+    pts = verts_xyz[:, [0, 2]].astype(np.float64)
+    # Subsample if huge (hull only needs boundary points)
+    if len(pts) > 10000:
+        # Keep points near the boundary by binning into angular sectors
+        cx, cz = pts.mean(axis=0)
+        angles = np.arctan2(pts[:, 1] - cz, pts[:, 0] - cx)
+        dists = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cz)**2)
+        n_bins = 360
+        bins = np.digitize(angles, np.linspace(-np.pi, np.pi, n_bins + 1)) - 1
+        keep = []
+        for b in range(n_bins):
+            mask = bins == b
+            if mask.any():
+                keep.append(pts[mask][dists[mask].argmax()])
+        pts = np.array(keep, dtype=np.float64)
+    # Sort for Andrew's monotone chain
+    order = np.lexsort((pts[:, 1], pts[:, 0]))
+    pts = pts[order]
+    # Remove exact duplicates
+    diff = np.abs(np.diff(pts, axis=0))
+    keep_mask = np.ones(len(pts), dtype=bool)
+    keep_mask[1:] = (diff[:, 0] > 1e-9) | (diff[:, 1] > 1e-9)
+    pts = pts[keep_mask]
     def cross2d(o, a, b):
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
     lower = []
-    for p in pts_sorted:
+    for p in pts:
         while len(lower) >= 2 and cross2d(lower[-2], lower[-1], p) <= 0:
             lower.pop()
         lower.append(p)
     upper = []
-    for p in reversed(pts_sorted):
+    for p in reversed(pts):
         while len(upper) >= 2 and cross2d(upper[-2], upper[-1], p) <= 0:
             upper.pop()
         upper.append(p)
     hull = np.array(lower[:-1] + upper[:-1], dtype=np.float64)
-    # Expand hull outward by margin
     if margin > 0 and len(hull) >= 3:
         center = hull.mean(axis=0)
         dirs = hull - center
-        lengths = np.sqrt((dirs ** 2).sum(axis=1, keepdims=True))
-        lengths = np.maximum(lengths, 1e-9)
+        lengths = np.maximum(np.sqrt((dirs ** 2).sum(axis=1, keepdims=True)), 1e-9)
         hull = hull + dirs / lengths * margin
-    # Precompute edge normals (outward-pointing)
+    # Precompute edge normals
     n = len(hull)
     normals = np.zeros((n, 2), dtype=np.float64)
     for i in range(n):
         j = (i + 1) % n
-        ex = hull[j][0] - hull[i][0]
-        ey = hull[j][1] - hull[i][1]
+        ex, ey = hull[j] - hull[i]
         ln = math.sqrt(ex * ex + ey * ey)
         if ln > 1e-9:
-            normals[i] = (ey / ln, -ex / ln)  # outward normal
-    return hull.astype(np.float64), normals
+            normals[i] = (ey / ln, -ex / ln)
+    print(f"Hull: {len(hull)} vertices from {len(verts_xyz)} mesh verts")
+    return hull, normals
 
 
 def check_hull_collision(px, py, fly_x, fly_y, fly_yaw, hull, normals, scale):
