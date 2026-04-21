@@ -1431,9 +1431,34 @@ def check_radial_collision(px, py, fly_x, fly_y, fly_yaw, profile, n_sectors, sc
 
 
 def fly_cam_radial_check(fly_x, fly_y, fly_heading, yaw_offset_deg, cam_x, cam_y,
-                          profile, n_sectors, scale, margin):
+                          profile, n_sectors, scale, margin, submesh_ellipses=None):
+    """Check main radial profile + per-submesh sphere collision."""
     fly_yaw = fly_heading + math.pi + math.radians(yaw_offset_deg)
-    return check_radial_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, profile, n_sectors, scale, margin)
+    # Main radial profile check
+    col, px, py = check_radial_collision(cam_x, cam_y, fly_x, fly_y, fly_yaw, profile, n_sectors, scale, margin)
+    if col:
+        return col, px, py
+    # Per-submesh sphere checks (catch gaps in the radial profile)
+    if submesh_ellipses:
+        cos_y = math.cos(fly_yaw)
+        sin_y = math.sin(fly_yaw)
+        for sub in submesh_ellipses:
+            # Transform submesh center to world
+            scx = sub["cx"] * scale
+            scz = sub["cz"] * scale
+            world_scx = fly_x + scx * cos_y + scz * sin_y
+            world_scz = fly_y - scx * sin_y + scz * cos_y
+            # Sphere check around submesh center
+            dx = cam_x - world_scx
+            dy = cam_y - world_scz
+            dist = math.hypot(dx, dy)
+            threshold = sub["r"] * scale + margin
+            if dist < threshold:
+                if dist < 1e-6:
+                    return True, threshold, 0.0
+                push_mag = threshold - dist + 0.01
+                return True, dx / dist * push_mag, dy / dist * push_mag
+    return False, 0.0, 0.0
 
 
 def fly_cam_ellipse_check(fly_x, fly_y, cam_x, cam_y, fly_yaw,
@@ -1710,7 +1735,43 @@ def main():
     N_COLLISION_SECTORS = 72
     fly_collision_profile, _ = compute_radial_profile(pos, N_COLLISION_SECTORS)
     print(f"Collision profile: {N_COLLISION_SECTORS} sectors, max reach {fly_collision_profile.max():.4f}")
-    print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm, Hull vertices: {len(fly_hull)}")
+
+    # Per-submesh ellipses (center + half-extents in XZ, raw mesh units)
+    submesh_ellipses = []
+    vert_offset = 0
+    for dc in fly_draws:
+        n_v = dc["count"]  # index count, but vertices are sequential per draw
+        # Estimate vertex range from draw order
+        pass
+    # Compute from vertex positions grouped by spatial clustering
+    # Simpler: split vertices by Z ranges matching known sub-parts
+    # Even simpler: compute per-submesh from indexed draw calls
+    # Most robust: compute ellipses from spatial clusters using the draw call index ranges
+    base_idx = 0
+    for i, dc in enumerate(fly_draws):
+        idx_start = dc["base_index"]
+        idx_end = idx_start + dc["count"]
+        sub_indices = fly_indices[idx_start:idx_end]
+        sub_verts = pos[sub_indices]
+        if len(sub_verts) < 3:
+            base_idx = idx_end
+            continue
+        sub_center_xz = np.array([sub_verts[:, 0].mean(), sub_verts[:, 2].mean()])
+        sub_half_x = float((sub_verts[:, 0].max() - sub_verts[:, 0].min()) * 0.5)
+        sub_half_z = float((sub_verts[:, 2].max() - sub_verts[:, 2].min()) * 0.5)
+        # Use max of X,Y,Z half-extents for robust coverage
+        sub_half_y = float((sub_verts[:, 1].max() - sub_verts[:, 1].min()) * 0.5)
+        sub_r = max(sub_half_x, sub_half_y, sub_half_z)
+        submesh_ellipses.append({
+            "cx": float(sub_center_xz[0]),
+            "cz": float(sub_center_xz[1]),
+            "hx": sub_half_x,
+            "hz": sub_half_z,
+            "r": sub_r,  # max radius for sphere fallback
+        })
+        print(f"  Submesh {i}: center=({sub_center_xz[0]:.3f},{sub_center_xz[1]:.3f}) half=({sub_half_x:.3f},{sub_half_z:.3f}) r={sub_r:.3f} verts={len(sub_verts)}")
+
+    print(f"Fly height: {fly_height_mm:.3f} mm, Camera height: {CAM_HEIGHT_MM:.3f} mm, Hull vertices: {len(fly_hull)}, Submeshes: {len(submesh_ellipses)}")
 
     fly_vao = GL.glGenVertexArrays(1)
     fly_vbo = GL.glGenBuffers(1)
@@ -2018,7 +2079,7 @@ def main():
 
             # OBB collision with camera — revert + slight push out
             col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist)
+                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
             if col:
                 x, y = prev_x, prev_y
                 # Re-check at prev position and use hull push vector if still colliding
@@ -2054,7 +2115,7 @@ def main():
             dy_move = y - prev_y
             x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
             col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist)
+                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
             if col:
                 x, y = prev_x, prev_y
                 sep = math.hypot(x - camera_x, y - camera_y)
@@ -2114,9 +2175,8 @@ def main():
         cam_dx = camera_x - prev_cam_x
         cam_dy = camera_y - prev_cam_y
         camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
-        col, cpx, cpy = fly_cam_ellipse_check(x, y, camera_x, camera_y,
-                                              heading + math.pi + math.radians(yaw_offset_deg),
-                                              fly_half_w_raw, fly_bound_radius_raw, fly_scale_collision, min_cam_fly_dist)
+        col, cpx, cpy = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                              fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
         if col:
             camera_x, camera_y = prev_cam_x, prev_cam_y
             # Re-check and use hull push vector
