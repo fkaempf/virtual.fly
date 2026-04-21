@@ -575,10 +575,7 @@ def build_minimap_base(
 
 def draw_minimap_dynamic(
     base_img,
-    x,
-    y,
-    heading,
-    trail_pts_uv,
+    flies_list,
     TRAIL_COLOR,
     TRAIL_THICK,
     center_u,
@@ -590,18 +587,22 @@ def draw_minimap_dynamic(
     cam_heading,
     cam_trail_pts_uv=None,
 ):
+    """Draw minimap with all flies and camera.
+    flies_list: list of dicts with keys x, y, heading, trail_pts_uv."""
     img = base_img.copy()
 
-    # Fly trail (fading)
-    if len(trail_pts_uv) >= 2:
-        now_color = np.array(TRAIL_COLOR, dtype=np.float32)
-        nseg = len(trail_pts_uv) - 1
-        for i in range(nseg):
-            p0 = trail_pts_uv[i]
-            p1 = trail_pts_uv[i + 1]
-            alpha = (i + 1) / nseg
-            col = tuple((now_color * (0.3 + 0.7 * alpha)).astype(np.int32).tolist())
-            cv2.line(img, p0, p1, col, TRAIL_THICK, cv2.LINE_AA)
+    # Fly trails (fading) for all flies
+    for fly_info in flies_list:
+        trail_pts_uv = fly_info["trail_pts_uv"]
+        if len(trail_pts_uv) >= 2:
+            now_color = np.array(TRAIL_COLOR, dtype=np.float32)
+            nseg = len(trail_pts_uv) - 1
+            for i in range(nseg):
+                p0 = trail_pts_uv[i]
+                p1 = trail_pts_uv[i + 1]
+                alpha = (i + 1) / nseg
+                col = tuple((now_color * (0.3 + 0.7 * alpha)).astype(np.int32).tolist())
+                cv2.line(img, p0, p1, col, TRAIL_THICK, cv2.LINE_AA)
 
     # Camera trail (fading)
     if cam_trail_pts_uv and len(cam_trail_pts_uv) >= 2:
@@ -637,8 +638,10 @@ def draw_minimap_dynamic(
     cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
     cv2.polylines(img, [cone_pts_np], True, (150, 150, 255), 1, cv2.LINE_AA)
 
-    fu, fv = world_to_minimap(x, y, center_u, center_v, scale_px_per_mm)
-    draw_arrow(img, fu, fv, heading, size_px=18, color=(0, 120, 255))
+    # Draw arrow for each fly
+    for fly_info in flies_list:
+        fu, fv = world_to_minimap(fly_info["x"], fly_info["y"], center_u, center_v, scale_px_per_mm)
+        draw_arrow(img, fu, fv, fly_info["heading"], size_px=18, color=(0, 120, 255))
 
     draw_arrow(img, cam_u, cam_v, cam_heading, size_px=16, color=(0, 0, 255))
     cv2.putText(
@@ -658,10 +661,11 @@ def draw_minimap_dynamic(
         2,
         cv2.LINE_AA,
     )
-    dist_mm = math.hypot(x - cam_x, y - cam_y)
+    # Show distance to closest fly
+    closest_dist = min(math.hypot(fi["x"] - cam_x, fi["y"] - cam_y) for fi in flies_list)
     cv2.putText(
         img,
-        f"cam-fly: {dist_mm:.1f} mm",
+        f"cam-fly: {closest_dist:.1f} mm",
         (10, img.shape[0] - 32),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -1871,21 +1875,30 @@ def main():
         FLY_CAM_FLIP_MODEL_FOR_ULTRAWIDE and proj_mode != 0 and fov_x_deg_effective > 180.0
     )
 
-    # state — random spawn if START_POS is (0, 0), otherwise use configured position
-    if START_POS == (0, 0):
-        spawn_angle = np.random.uniform(0, 2 * math.pi)
-        spawn_r = np.random.uniform(0.3, 0.7) * ARENA_RADIUS_MM
-        x = spawn_r * math.cos(spawn_angle)
-        y = spawn_r * math.sin(spawn_angle)
-        heading = np.random.uniform(0, 2 * math.pi)
-        print(f"Fly spawned at ({x:.1f}, {y:.1f}) heading {math.degrees(heading):.0f}°")
-    else:
-        x, y = START_POS
-        heading = math.radians(START_HEADING_DEG)
+    # state — spawn flies (NUM_FLIES count); first fly uses START_POS if set, others random
+    flies = []
+    for fi in range(NUM_FLIES):
+        if START_POS == (0, 0) or fi > 0:
+            spawn_angle = np.random.uniform(0, 2 * math.pi)
+            spawn_r = np.random.uniform(0.3, 0.7) * ARENA_RADIUS_MM
+            fx = spawn_r * math.cos(spawn_angle)
+            fy = spawn_r * math.sin(spawn_angle)
+            fh = np.random.uniform(0, 2 * math.pi)
+        else:
+            fx, fy = START_POS
+            fh = math.radians(START_HEADING_DEG)
+        flies.append({
+            "x": fx, "y": fy, "heading": fh,
+            "prev_x": fx, "prev_y": fy,
+            "auto_state": "pause",
+            "auto_state_t_remaining": np.random.exponential(AUTO_MEAN_PAUSE_DUR),
+            "auto_pending_turn": 0.0,
+            "trail": deque(),
+        })
+    print(f"Spawned {NUM_FLIES} flies")
+    for fi, fl in enumerate(flies):
+        print(f"  fly {fi}: ({fl['x']:.1f}, {fl['y']:.1f}) heading {math.degrees(fl['heading']):.0f} deg")
 
-    auto_state = "pause"
-    auto_state_t_remaining = np.random.exponential(AUTO_MEAN_PAUSE_DUR)
-    auto_pending_turn = 0.0
     artificial_paused = False
 
     yaw_offset_deg = float(FLY_MODEL_YAW_OFFSET_DEG)
@@ -1899,7 +1912,10 @@ def main():
     cam_height = CAM_HEIGHT_MM
     cam_heading = math.radians(START_HEADING_DEG)
 
-    apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
+    apparent_distance_mm = min(
+        resolve_apparent_distance_mm((f["x"], f["y"]), (camera_x, camera_y), cam_height)
+        for f in flies
+    )
     fly_scale_target = fly_base_scale * (screen_distance_mm / max(apparent_distance_mm, 1e-6))
     fly_scale_current = fly_scale_target
 
@@ -1908,7 +1924,6 @@ def main():
     turn_rate_rad = math.radians(TURN_DEG_S)
     cam_turn_rate_rad = math.radians(CAMERA_TURN_DEG_S)
 
-    trail = deque()
     cam_trail = deque()
 
     # minimap geometry
@@ -2035,120 +2050,147 @@ def main():
         if keys[pygame.K_q]:
             running = False
 
-        prev_x, prev_y = x, y
         prev_cam_x, prev_cam_y = camera_x, camera_y
 
-        # Compute instantaneous collision scale (no smoothing lag)
-        apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
+        # Compute instantaneous collision scale from closest fly (no smoothing lag)
+        apparent_distance_mm = min(
+            resolve_apparent_distance_mm((f["x"], f["y"]), (camera_x, camera_y), cam_height)
+            for f in flies
+        )
         fly_scale_collision = fly_base_scale * (screen_distance_mm / max(apparent_distance_mm, 1e-6))
 
-        # fly behaviour
-        if USE_AUTOMATIC_FLY:
-            moving = False
-            if not artificial_paused:
-                auto_state_t_remaining -= dt
+        # --- Per-fly movement loop ---
+        for fly_idx, fly in enumerate(flies):
+            fly["prev_x"], fly["prev_y"] = fly["x"], fly["y"]
+            prev_x, prev_y = fly["prev_x"], fly["prev_y"]
+            x, y, heading = fly["x"], fly["y"], fly["heading"]
 
-                if auto_state == "run":
-                    max_auto_turn = turn_rate_rad * STAND_TURN_MULT * dt
-                    if abs(auto_pending_turn) > 1e-4:
-                        turn_step = max(-max_auto_turn, min(max_auto_turn, auto_pending_turn))
-                        heading += turn_step
-                        auto_pending_turn -= turn_step
-                    else:
-                        x += speed_f * math.sin(heading) * dt
-                        y += speed_f * math.cos(heading) * dt
-                        moving = True
+            # fly behaviour
+            if USE_AUTOMATIC_FLY:
+                moving = False
+                if not artificial_paused:
+                    fly["auto_state_t_remaining"] -= dt
 
-                        heading += math.radians(WALK_TURN_NOISE_DEG_RMS) * np.random.normal(0.0, math.sqrt(dt))
-                        x += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
-                        y += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
+                    if fly["auto_state"] == "run":
+                        max_auto_turn = turn_rate_rad * STAND_TURN_MULT * dt
+                        if abs(fly["auto_pending_turn"]) > 1e-4:
+                            turn_step = max(-max_auto_turn, min(max_auto_turn, fly["auto_pending_turn"]))
+                            heading += turn_step
+                            fly["auto_pending_turn"] -= turn_step
+                        else:
+                            x += speed_f * math.sin(heading) * dt
+                            y += speed_f * math.cos(heading) * dt
+                            moving = True
 
-                r_center = math.hypot(x, y)
-                if moving and r_center > AUTO_EDGE_THRESH:
-                    angle_to_center = math.atan2(-x, -y)
-                    delta = angle_to_center - heading
-                    delta = (delta + math.pi) % (2.0 * math.pi) - math.pi
-                    max_turn = math.radians(AUTO_EDGE_TURN_DEG) * dt
-                    delta_clamped = max(-max_turn, min(max_turn, delta))
-                    heading += delta_clamped
+                            heading += math.radians(WALK_TURN_NOISE_DEG_RMS) * np.random.normal(0.0, math.sqrt(dt))
+                            x += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
+                            y += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
 
-                if auto_state_t_remaining <= 0.0:
-                    if auto_state == "pause":
-                        auto_state = "run"
-                        auto_state_t_remaining = np.random.exponential(AUTO_MEAN_RUN_DUR)
-                        auto_pending_turn += math.radians(AUTO_TURN_STD_DEG) * np.random.normal()
-                    else:
-                        auto_state = "pause"
-                        auto_state_t_remaining = np.random.exponential(AUTO_MEAN_PAUSE_DUR)
+                    r_center = math.hypot(x, y)
+                    if moving and r_center > AUTO_EDGE_THRESH:
+                        angle_to_center = math.atan2(-x, -y)
+                        delta = angle_to_center - heading
+                        delta = (delta + math.pi) % (2.0 * math.pi) - math.pi
+                        max_turn = math.radians(AUTO_EDGE_TURN_DEG) * dt
+                        delta_clamped = max(-max_turn, min(max_turn, delta))
+                        heading += delta_clamped
 
-            # Arena boundary with sub-stepped wall sliding
-            dx_move = x - prev_x
-            dy_move = y - prev_y
-            x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
+                    if fly["auto_state_t_remaining"] <= 0.0:
+                        if fly["auto_state"] == "pause":
+                            fly["auto_state"] = "run"
+                            fly["auto_state_t_remaining"] = np.random.exponential(AUTO_MEAN_RUN_DUR)
+                            fly["auto_pending_turn"] += math.radians(AUTO_TURN_STD_DEG) * np.random.normal()
+                        else:
+                            fly["auto_state"] = "pause"
+                            fly["auto_state_t_remaining"] = np.random.exponential(AUTO_MEAN_PAUSE_DUR)
 
-            # OBB collision with camera — revert + slight push out
-            col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
-            if col:
-                # Slide fly along collision boundary
-                fly_dx = x - prev_x
-                fly_dy = y - prev_y
-                x, y = prev_x, prev_y
-                push_len = math.hypot(px, py)
-                if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
-                    nx, ny = px / push_len, py / push_len
-                    dot_n = fly_dx * nx + fly_dy * ny
-                    slide_dx = fly_dx - dot_n * nx
-                    slide_dy = fly_dy - dot_n * ny
-                    x = prev_x + slide_dx
-                    y = prev_y + slide_dy
-                    col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                       fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
-                    if col2:
-                        x, y = prev_x, prev_y
+                # Arena boundary with sub-stepped wall sliding
+                dx_move = x - prev_x
+                dy_move = y - prev_y
+                x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
 
-        else:
-            moving = keys[pygame.K_w] or keys[pygame.K_s]
-            current_turn_rate = turn_rate_rad * (STAND_TURN_MULT if not moving else 1.0)
+                # OBB collision with camera — revert + slight push out
+                col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                 fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                if col:
+                    # Slide fly along collision boundary
+                    fly_dx = x - prev_x
+                    fly_dy = y - prev_y
+                    x, y = prev_x, prev_y
+                    push_len = math.hypot(px, py)
+                    if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
+                        nx, ny = px / push_len, py / push_len
+                        dot_n = fly_dx * nx + fly_dy * ny
+                        slide_dx = fly_dx - dot_n * nx
+                        slide_dy = fly_dy - dot_n * ny
+                        x = prev_x + slide_dx
+                        y = prev_y + slide_dy
+                        col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                           fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                        if col2:
+                            x, y = prev_x, prev_y
 
-            if keys[pygame.K_a]:
-                heading -= current_turn_rate * dt  # left key turns left
-            if keys[pygame.K_d]:
-                heading += current_turn_rate * dt  # right key turns right
+            elif fly_idx == 0:
+                # Keyboard control only for first fly
+                moving = keys[pygame.K_w] or keys[pygame.K_s]
+                current_turn_rate = turn_rate_rad * (STAND_TURN_MULT if not moving else 1.0)
 
-            if keys[pygame.K_w]:
-                x += speed_f * math.sin(heading) * dt
-                y += speed_f * math.cos(heading) * dt
-            if keys[pygame.K_s]:
-                x -= speed_b * math.sin(heading) * dt
-                y -= speed_b * math.cos(heading) * dt
+                if keys[pygame.K_a]:
+                    heading -= current_turn_rate * dt  # left key turns left
+                if keys[pygame.K_d]:
+                    heading += current_turn_rate * dt  # right key turns right
 
-            if moving:
-                heading += math.radians(WALK_TURN_NOISE_DEG_RMS) * np.random.normal(0.0, math.sqrt(dt))
-                x += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
-                y += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
+                if keys[pygame.K_w]:
+                    x += speed_f * math.sin(heading) * dt
+                    y += speed_f * math.cos(heading) * dt
+                if keys[pygame.K_s]:
+                    x -= speed_b * math.sin(heading) * dt
+                    y -= speed_b * math.cos(heading) * dt
 
-            dx_move = x - prev_x
-            dy_move = y - prev_y
-            x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
-            col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                             fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
-            if col:
-                fly_dx = x - prev_x
-                fly_dy = y - prev_y
-                x, y = prev_x, prev_y
-                push_len = math.hypot(px, py)
-                if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
-                    nx, ny = px / push_len, py / push_len
-                    dot_n = fly_dx * nx + fly_dy * ny
-                    slide_dx = fly_dx - dot_n * nx
-                    slide_dy = fly_dy - dot_n * ny
-                    x = prev_x + slide_dx
-                    y = prev_y + slide_dy
-                    col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                       fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
-                    if col2:
-                        x, y = prev_x, prev_y
+                if moving:
+                    heading += math.radians(WALK_TURN_NOISE_DEG_RMS) * np.random.normal(0.0, math.sqrt(dt))
+                    x += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
+                    y += WALK_TRANS_NOISE_MM_RMS * np.random.normal(0.0, math.sqrt(dt))
+
+                dx_move = x - prev_x
+                dy_move = y - prev_y
+                x, y = arena_constrain(prev_x, prev_y, dx_move, dy_move, ARENA_RADIUS_MM)
+                col, px, py = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                 fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                if col:
+                    fly_dx = x - prev_x
+                    fly_dy = y - prev_y
+                    x, y = prev_x, prev_y
+                    push_len = math.hypot(px, py)
+                    if push_len > 1e-6 and math.hypot(fly_dx, fly_dy) > 1e-6:
+                        nx, ny = px / push_len, py / push_len
+                        dot_n = fly_dx * nx + fly_dy * ny
+                        slide_dx = fly_dx - dot_n * nx
+                        slide_dy = fly_dy - dot_n * ny
+                        x = prev_x + slide_dx
+                        y = prev_y + slide_dy
+                        col2, _, _ = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
+                                                           fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                        if col2:
+                            x, y = prev_x, prev_y
+
+            # Write back per-fly state
+            fly["x"], fly["y"], fly["heading"] = x, y, heading
+
+        # --- Fly-fly collision (push apart if overlapping) ---
+        for i in range(len(flies)):
+            for j in range(i + 1, len(flies)):
+                dx_ff = flies[i]["x"] - flies[j]["x"]
+                dy_ff = flies[i]["y"] - flies[j]["y"]
+                dist_ff = math.hypot(dx_ff, dy_ff)
+                min_d = fly_bound_radius_raw * fly_scale_current * 2
+                if dist_ff < min_d and dist_ff > 1e-6:
+                    push = (min_d - dist_ff) * 0.5 + 0.01
+                    nx_ff, ny_ff = dx_ff / dist_ff, dy_ff / dist_ff
+                    flies[i]["x"] += nx_ff * push
+                    flies[i]["y"] += ny_ff * push
+                    flies[j]["x"] -= nx_ff * push
+                    flies[j]["y"] -= ny_ff * push
 
         # camera controls — FicTrac (F key to temporarily pause) or keyboard fallback
         if use_fictrac and not fictrac_paused and fictrac.poll():
@@ -2202,34 +2244,40 @@ def main():
         cam_dx = camera_x - prev_cam_x
         cam_dy = camera_y - prev_cam_y
         camera_x, camera_y = arena_constrain(prev_cam_x, prev_cam_y, cam_dx, cam_dy, ARENA_RADIUS_MM)
-        col, cpx, cpy = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                              fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
-        if col:
-            # Slide along collision boundary: remove normal component, keep tangent
-            camera_x, camera_y = prev_cam_x, prev_cam_y
-            push_len = math.hypot(cpx, cpy)
-            if push_len > 1e-6 and math.hypot(cam_dx, cam_dy) > 1e-6:
-                # Normal direction (from push vector)
-                nx, ny = cpx / push_len, cpy / push_len
-                # Remove normal component from movement
-                dot_n = cam_dx * nx + cam_dy * ny
-                slide_dx = cam_dx - dot_n * nx
-                slide_dy = cam_dy - dot_n * ny
-                # Apply slide movement
-                camera_x = prev_cam_x + slide_dx
-                camera_y = prev_cam_y + slide_dy
-                # Re-check after slide
-                col2, cpx2, cpy2 = fly_cam_radial_check(x, y, heading, yaw_offset_deg, camera_x, camera_y,
-                                                          fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+        # Camera collision against ALL flies
+        for fly in flies:
+            col, cpx, cpy = fly_cam_radial_check(fly["x"], fly["y"], fly["heading"], yaw_offset_deg, camera_x, camera_y,
+                                                  fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+            if col:
+                # Slide along collision boundary: remove normal component, keep tangent
+                camera_x, camera_y = prev_cam_x, prev_cam_y
+                push_len = math.hypot(cpx, cpy)
+                if push_len > 1e-6 and math.hypot(cam_dx, cam_dy) > 1e-6:
+                    # Normal direction (from push vector)
+                    nx, ny = cpx / push_len, cpy / push_len
+                    # Remove normal component from movement
+                    dot_n = cam_dx * nx + cam_dy * ny
+                    slide_dx = cam_dx - dot_n * nx
+                    slide_dy = cam_dy - dot_n * ny
+                    # Apply slide movement
+                    camera_x = prev_cam_x + slide_dx
+                    camera_y = prev_cam_y + slide_dy
+                    # Re-check after slide
+                    col2, cpx2, cpy2 = fly_cam_radial_check(fly["x"], fly["y"], fly["heading"], yaw_offset_deg, camera_x, camera_y,
+                                                              fly_collision_profile, N_COLLISION_SECTORS, fly_scale_collision, min_cam_fly_dist, submesh_ellipses)
+                    if col2:
+                        camera_x = prev_cam_x + cpx2
+                        camera_y = prev_cam_y + cpy2
                 if col2:
-                    camera_x = prev_cam_x + cpx2
-                    camera_y = prev_cam_y + cpy2
-            if col2:
-                camera_x += cpx2
-                camera_y += cpy2
+                    camera_x += cpx2
+                    camera_y += cpy2
+                break  # stop after first collision
 
-        # Smooth scale based on live camera-fly distance so apparent size matches separation.
-        apparent_distance_mm = resolve_apparent_distance_mm((x, y), (camera_x, camera_y), cam_height)
+        # Smooth scale based on closest fly distance so apparent size matches separation.
+        apparent_distance_mm = min(
+            resolve_apparent_distance_mm((f["x"], f["y"]), (camera_x, camera_y), cam_height)
+            for f in flies
+        )
         fly_scale_target = fly_base_scale * (screen_distance_mm / max(apparent_distance_mm, 1e-6))
         if DIST_SCALE_SMOOTH_HZ > 0:
             alpha = 1.0 - math.exp(-DIST_SCALE_SMOOTH_HZ * dt)
@@ -2255,10 +2303,11 @@ def main():
             )
 
         if SHOW_MINIMAP:
-            trail.append((now, x, y))
-            expire_before = now - TRAIL_SECS
-            while trail and trail[0][0] < expire_before:
-                trail.popleft()
+            for fly in flies:
+                fly["trail"].append((now, fly["x"], fly["y"]))
+                expire_before = now - TRAIL_SECS
+                while fly["trail"] and fly["trail"][0][0] < expire_before:
+                    fly["trail"].popleft()
             cam_trail.append((now, camera_x, camera_y))
             cam_expire = now - CAM_TRAIL_SECS
             while cam_trail and cam_trail[0][0] < cam_expire:
@@ -2279,13 +2328,6 @@ def main():
         up = [0.0, 1.0, 0.0]
 
         view_mat = look_at(eye, target, up)
-        # Rotate model nose from -Z to movement direction without axis flips.
-        # Adding pi turns the nose 180° (from -Z to +Z), then heading aligns it.
-        yaw = heading + math.pi + math.radians(yaw_offset_deg)
-        base_rot = mat4_rotate_y(yaw)
-        fly_y_offset = float(extents[1]) * 0.5 * fly_scale_current  # lift fly so bottom touches floor
-        model_mat = mat4_translate(x, fly_y_offset, y) @ base_rot @ mat4_scale(fly_scale_current)
-        mvp = proj_mat @ view_mat @ model_mat
 
         GL.glUseProgram(fly_prog)
 
@@ -2310,90 +2352,99 @@ def main():
             GL.glDisable(GL.GL_BLEND)
         GL.glBindVertexArray(0)
 
-        # Render fly model
-        GL.glBindVertexArray(fly_vao)
-        GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, mvp.T.astype(np.float32))
-        GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, model_mat.T.astype(np.float32))
-        GL.glUniform1f(u_fly_far_loc, z_far)
-        GL.glUniform1f(u_fly_fovy_loc, fov_y_rad)
-        GL.glUniform1f(u_fly_fovx_loc, fov_x_rad)
-        GL.glUniform1i(u_fly_proj_mode_loc, proj_mode)
-
+        # Render all fly models
         index_stride = ctypes.sizeof(ctypes.c_uint32)
-        for dc, tex in zip(fly_draws, draw_textures):
-            GL.glUniform4fv(u_fly_base_color_loc, 1, dc["base_color_factor"].astype(np.float32))
-            GL.glUniform1i(u_fly_has_tex_loc, 1 if tex is not None else 0)
-            if tex is not None:
-                GL.glActiveTexture(GL.GL_TEXTURE0)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
-            GL.glDrawElements(
-                GL.GL_TRIANGLES,
-                dc["count"],
-                GL.GL_UNSIGNED_INT,
-                ctypes.c_void_p(dc["base_index"] * index_stride),
-            )
-        GL.glBindVertexArray(0)
+        for fly in flies:
+            yaw = fly["heading"] + math.pi + math.radians(yaw_offset_deg)
+            base_rot = mat4_rotate_y(yaw)
+            fly_y_offset = float(extents[1]) * 0.5 * fly_scale_current
+            model_mat = mat4_translate(fly["x"], fly_y_offset, fly["y"]) @ base_rot @ mat4_scale(fly_scale_current)
+            mvp = proj_mat @ view_mat @ model_mat
 
-        # Hitbox wireframe (toggle with B key)
-        if show_hitbox:
-            obb_yaw = heading + math.pi + math.radians(yaw_offset_deg)
-            cos_e = math.cos(obb_yaw)
-            sin_e = math.sin(obb_yaw)
-            line_verts = []
-            top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_collision
-            # Draw radial profile: multiple horizontal rings + many vertical lines
-            n_viz = N_COLLISION_SECTORS
-            n_h_rings = 6  # horizontal rings at different heights
-            n_v_lines = 24  # vertical lines around the perimeter
-            for hi in range(n_h_rings):
-                h_y = 0.01 + (top_y - 0.01) * hi / max(n_h_rings - 1, 1)
-                for i in range(n_viz):
-                    for ci in (i, (i + 1) % n_viz):
-                        a = 2 * math.pi * ci / n_viz
-                        r = fly_collision_profile[ci] * fly_scale_collision + min_cam_fly_dist
-                        lx = r * math.cos(a)
-                        lz = r * math.sin(a)
-                        wx = x + lx * cos_e + lz * sin_e
-                        wz = y - lx * sin_e + lz * cos_e
-                        line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
-            # Vertical lines
-            for i in range(0, n_viz, max(1, n_viz // n_v_lines)):
-                a = 2 * math.pi * i / n_viz
-                r = fly_collision_profile[i] * fly_scale_collision + min_cam_fly_dist
-                lx = r * math.cos(a)
-                lz = r * math.sin(a)
-                wx = x + lx * cos_e + lz * sin_e
-                wz = y - lx * sin_e + lz * cos_e
-                line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
-                line_verts.extend([wx, top_y, wz,  0,1,0,  0,1,0,1,  0,0])
-            line_data = np.array(line_verts, dtype=np.float32)
-            hitbox_model = np.eye(4, dtype=np.float32)
-            hitbox_mvp = proj_mat @ view_mat @ hitbox_model
-            GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, hitbox_mvp.T.astype(np.float32))
-            GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, hitbox_model.T.astype(np.float32))
-            GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1,1,1,1], dtype=np.float32))
-            GL.glUniform1i(u_fly_has_tex_loc, 0)
-            GL.glUniform1f(u_fly_ambient_loc, 1.0)
-            GL.glUniform4fv(u_fly_light_int_loc, 1, np.zeros(4, dtype=np.float32))
-            tmp_vao = GL.glGenVertexArrays(1)
-            tmp_vbo = GL.glGenBuffers(1)
-            GL.glBindVertexArray(tmp_vao)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, tmp_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, line_data.nbytes, line_data, GL.GL_STREAM_DRAW)
-            stride_f2 = 12 * 4
-            GL.glEnableVertexAttribArray(0)
-            GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(0))
-            GL.glEnableVertexAttribArray(1)
-            GL.glVertexAttribPointer(1, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(12))
-            GL.glEnableVertexAttribArray(2)
-            GL.glVertexAttribPointer(2, 4, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(24))
-            GL.glEnableVertexAttribArray(3)
-            GL.glVertexAttribPointer(3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(40))
-            GL.glDrawArrays(GL.GL_LINES, 0, len(line_verts) // 12)
+            GL.glBindVertexArray(fly_vao)
+            GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, mvp.T.astype(np.float32))
+            GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, model_mat.T.astype(np.float32))
+            GL.glUniform1f(u_fly_far_loc, z_far)
+            GL.glUniform1f(u_fly_fovy_loc, fov_y_rad)
+            GL.glUniform1f(u_fly_fovx_loc, fov_x_rad)
+            GL.glUniform1i(u_fly_proj_mode_loc, proj_mode)
+
+            for dc, tex in zip(fly_draws, draw_textures):
+                GL.glUniform4fv(u_fly_base_color_loc, 1, dc["base_color_factor"].astype(np.float32))
+                GL.glUniform1i(u_fly_has_tex_loc, 1 if tex is not None else 0)
+                if tex is not None:
+                    GL.glActiveTexture(GL.GL_TEXTURE0)
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+                GL.glDrawElements(
+                    GL.GL_TRIANGLES,
+                    dc["count"],
+                    GL.GL_UNSIGNED_INT,
+                    ctypes.c_void_p(dc["base_index"] * index_stride),
+                )
             GL.glBindVertexArray(0)
-            GL.glDeleteBuffers(1, [tmp_vbo])
-            GL.glDeleteVertexArrays(1, [tmp_vao])
-            # Restore fly lighting
+
+        # Hitbox wireframe for ALL flies (toggle with B key)
+        if show_hitbox:
+            for fly in flies:
+                obb_yaw = fly["heading"] + math.pi + math.radians(yaw_offset_deg)
+                cos_e = math.cos(obb_yaw)
+                sin_e = math.sin(obb_yaw)
+                line_verts = []
+                fly_y_offset = float(extents[1]) * 0.5 * fly_scale_current
+                top_y = fly_y_offset + float(extents[1]) * 0.5 * fly_scale_collision
+                # Draw radial profile: multiple horizontal rings + many vertical lines
+                n_viz = N_COLLISION_SECTORS
+                n_h_rings = 6  # horizontal rings at different heights
+                n_v_lines = 24  # vertical lines around the perimeter
+                for hi in range(n_h_rings):
+                    h_y = 0.01 + (top_y - 0.01) * hi / max(n_h_rings - 1, 1)
+                    for i in range(n_viz):
+                        for ci in (i, (i + 1) % n_viz):
+                            a = 2 * math.pi * ci / n_viz
+                            r = fly_collision_profile[ci] * fly_scale_collision + min_cam_fly_dist
+                            lx = r * math.cos(a)
+                            lz = r * math.sin(a)
+                            wx = fly["x"] + lx * cos_e + lz * sin_e
+                            wz = fly["y"] - lx * sin_e + lz * cos_e
+                            line_verts.extend([wx, h_y, wz,  0,1,0,  0,1,0,1,  0,0])
+                # Vertical lines
+                for i in range(0, n_viz, max(1, n_viz // n_v_lines)):
+                    a = 2 * math.pi * i / n_viz
+                    r = fly_collision_profile[i] * fly_scale_collision + min_cam_fly_dist
+                    lx = r * math.cos(a)
+                    lz = r * math.sin(a)
+                    wx = fly["x"] + lx * cos_e + lz * sin_e
+                    wz = fly["y"] - lx * sin_e + lz * cos_e
+                    line_verts.extend([wx, 0.01, wz,  0,1,0,  0,1,0,1,  0,0])
+                    line_verts.extend([wx, top_y, wz,  0,1,0,  0,1,0,1,  0,0])
+                line_data = np.array(line_verts, dtype=np.float32)
+                hitbox_model = np.eye(4, dtype=np.float32)
+                hitbox_mvp = proj_mat @ view_mat @ hitbox_model
+                GL.glUniformMatrix4fv(u_fly_mvp_loc, 1, GL.GL_FALSE, hitbox_mvp.T.astype(np.float32))
+                GL.glUniformMatrix4fv(u_fly_model_loc, 1, GL.GL_FALSE, hitbox_model.T.astype(np.float32))
+                GL.glUniform4fv(u_fly_base_color_loc, 1, np.array([1,1,1,1], dtype=np.float32))
+                GL.glUniform1i(u_fly_has_tex_loc, 0)
+                GL.glUniform1f(u_fly_ambient_loc, 1.0)
+                GL.glUniform4fv(u_fly_light_int_loc, 1, np.zeros(4, dtype=np.float32))
+                tmp_vao = GL.glGenVertexArrays(1)
+                tmp_vbo = GL.glGenBuffers(1)
+                GL.glBindVertexArray(tmp_vao)
+                GL.glBindBuffer(GL.GL_ARRAY_BUFFER, tmp_vbo)
+                GL.glBufferData(GL.GL_ARRAY_BUFFER, line_data.nbytes, line_data, GL.GL_STREAM_DRAW)
+                stride_f2 = 12 * 4
+                GL.glEnableVertexAttribArray(0)
+                GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(0))
+                GL.glEnableVertexAttribArray(1)
+                GL.glVertexAttribPointer(1, 3, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(12))
+                GL.glEnableVertexAttribArray(2)
+                GL.glVertexAttribPointer(2, 4, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(24))
+                GL.glEnableVertexAttribArray(3)
+                GL.glVertexAttribPointer(3, 2, GL.GL_FLOAT, GL.GL_FALSE, stride_f2, ctypes.c_void_p(40))
+                GL.glDrawArrays(GL.GL_LINES, 0, len(line_verts) // 12)
+                GL.glBindVertexArray(0)
+                GL.glDeleteBuffers(1, [tmp_vbo])
+                GL.glDeleteVertexArrays(1, [tmp_vao])
+            # Restore fly lighting (once after all hitboxes)
             GL.glUniform1f(u_fly_ambient_loc, float(LIGHT_AMBIENT))
             GL.glUniform4fv(u_fly_light_int_loc, 1, np.array(LIGHT_INTENSITIES, dtype=np.float32))
 
@@ -2420,20 +2471,23 @@ def main():
         # minimap (separate cv2 window)
         if SHOW_MINIMAP and now >= next_minimap_t:
             next_minimap_t = now + 1.0 / MINIMAP_HZ
-            trail_uv = [
-                world_to_minimap(xi, yi, center_u, center_v, scale_px_per_mm)
-                for _, xi, yi in trail
-            ]
+            flies_minimap = []
+            for fly in flies:
+                trail_uv = [
+                    world_to_minimap(xi, yi, center_u, center_v, scale_px_per_mm)
+                    for _, xi, yi in fly["trail"]
+                ]
+                flies_minimap.append({
+                    "x": fly["x"], "y": fly["y"], "heading": fly["heading"],
+                    "trail_pts_uv": trail_uv,
+                })
             cam_trail_uv = [
                 world_to_minimap(cx, cy, center_u, center_v, scale_px_per_mm)
                 for _, cx, cy in cam_trail
             ]
             map_img = draw_minimap_dynamic(
                 minimap_base,
-                x,
-                y,
-                heading,
-                trail_uv,
+                flies_minimap,
                 TRAIL_COLOR,
                 TRAIL_THICK,
                 center_u,
@@ -2490,21 +2544,21 @@ def main():
             elif cv_lo == ord(','):
                 cam_height -= HEIGHT_ADJ_STEP_MM
                 update_caption()
-            # Movement (step-based from minimap, held from pygame)
+            # Movement (step-based from minimap, held from pygame) — controls flies[0]
             step_mm = SPEED_MM_S * dt * 3  # larger step for tap-based input
             step_rad = math.radians(TURN_DEG_S) * dt * 3
             cam_step = CAMERA_SPEED_MM_S * dt * 3
             cam_turn = math.radians(CAMERA_TURN_DEG_S) * dt * 3
             if cv_lo == ord('w'):
-                x += step_mm * math.sin(heading)
-                y += step_mm * math.cos(heading)
+                flies[0]["x"] += step_mm * math.sin(flies[0]["heading"])
+                flies[0]["y"] += step_mm * math.cos(flies[0]["heading"])
             elif cv_lo == ord('s'):
-                x -= step_mm * math.sin(heading)
-                y -= step_mm * math.cos(heading)
+                flies[0]["x"] -= step_mm * math.sin(flies[0]["heading"])
+                flies[0]["y"] -= step_mm * math.cos(flies[0]["heading"])
             elif cv_lo == ord('d'):
-                heading += step_rad
+                flies[0]["heading"] += step_rad
             elif cv_lo == ord('f'):
-                heading -= step_rad
+                flies[0]["heading"] -= step_rad
             elif cv_key == 2490368:  # Up arrow
                 camera_x += cam_step * math.sin(cam_heading)
                 camera_y += cam_step * math.cos(cam_heading)
